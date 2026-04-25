@@ -69,7 +69,10 @@ def cholesky_solve(
     def _host(data_h, b_h):
         factor = _get_or_build_factor(np.asarray(data_h), indices, shape)
         x = factor.solve(np.array(b_h, copy=True))
-        return np.asarray(x).astype(out_dtype, copy=False)
+        x = np.asarray(x).astype(out_dtype, copy=False)
+        if x.shape != out_shape:
+            x = x.reshape(out_shape)
+        return x
 
     return jax.pure_callback(
         _host,

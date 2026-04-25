@@ -34,7 +34,10 @@ def solve(
                 x, _ = spla.cg(A, b_np)
         else:
             raise ValueError(f"unknown scipy solve method: {method!r}")
-        return np.asarray(x).astype(out_dtype, copy=False)
+        x = np.asarray(x).astype(out_dtype, copy=False)
+        if x.shape != out_shape:
+            x = x.reshape(out_shape)
+        return x
 
     return jax.pure_callback(
         _host,
