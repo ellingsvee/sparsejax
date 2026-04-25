@@ -153,7 +153,9 @@ def _sksparse_unavailable_row(op: str, N: int, n: int, nnz: int) -> Result:
     )
 
 
-def bench_reference(op: str, A_coo: sp.coo_matrix, N: int, repeats: int, warmup: int) -> list[Result]:
+def bench_reference(
+    op: str, A_coo: sp.coo_matrix, N: int, repeats: int, warmup: int
+) -> list[Result]:
     """Run scipy/sksparse on numpy directly (no JAX) so JAX overhead is visible."""
     n = A_coo.shape[0]
     nnz = A_coo.nnz
@@ -164,21 +166,49 @@ def bench_reference(op: str, A_coo: sp.coo_matrix, N: int, repeats: int, warmup:
 
     if op == "spmv":
         x = rng.standard_normal(n)
-        rows.append(_ref_row(op, "scipy(np)", N, n, nnz, lambda: A_csr @ x, repeats, warmup))
+        rows.append(
+            _ref_row(op, "scipy(np)", N, n, nnz, lambda: A_csr @ x, repeats, warmup)
+        )
     elif op == "spadd":
         B_csr = A_coo.T.tocsr()
-        rows.append(_ref_row(op, "scipy(np)", N, n, nnz, lambda: A_csr + B_csr, repeats, warmup))
+        rows.append(
+            _ref_row(op, "scipy(np)", N, n, nnz, lambda: A_csr + B_csr, repeats, warmup)
+        )
     elif op == "spdmm":
         X = A_coo.toarray()
-        rows.append(_ref_row(op, "scipy(np)", N, n, nnz, lambda: A_csr @ X, repeats, warmup))
+        rows.append(
+            _ref_row(op, "scipy(np)", N, n, nnz, lambda: A_csr @ X, repeats, warmup)
+        )
     elif op == "spspmm":
-        rows.append(_ref_row(op, "scipy(np)", N, n, nnz, lambda: A_csr @ A_csr, repeats, warmup))
+        rows.append(
+            _ref_row(op, "scipy(np)", N, n, nnz, lambda: A_csr @ A_csr, repeats, warmup)
+        )
     elif op == "spsolve":
         b = rng.standard_normal(n)
-        rows.append(_ref_row(op, "scipy(np)", N, n, nnz, lambda: spla.spsolve(A_csc, b), repeats, warmup))
+        rows.append(
+            _ref_row(
+                op,
+                "scipy(np)",
+                N,
+                n,
+                nnz,
+                lambda: spla.spsolve(A_csc, b),
+                repeats,
+                warmup,
+            )
+        )
         if _HAS_SKSPARSE:
             rows.append(
-                _ref_row(op, "cholmod(np)", N, n, nnz, lambda: _sks_cho_factor(A_csc).solve(b), repeats, warmup)
+                _ref_row(
+                    op,
+                    "cholmod(np)",
+                    N,
+                    n,
+                    nnz,
+                    lambda: _sks_cho_factor(A_csc).solve(b),
+                    repeats,
+                    warmup,
+                )
             )
         else:
             rows.append(_sksparse_unavailable_row(op, N, n, nnz))
@@ -188,7 +218,16 @@ def bench_reference(op: str, A_coo: sp.coo_matrix, N: int, repeats: int, warmup:
         else:
             b = rng.standard_normal(n)
             rows.append(
-                _ref_row(op, "cholmod(np)", N, n, nnz, lambda: _sks_cho_factor(A_csc).solve(b), repeats, warmup)
+                _ref_row(
+                    op,
+                    "cholmod(np)",
+                    N,
+                    n,
+                    nnz,
+                    lambda: _sks_cho_factor(A_csc).solve(b),
+                    repeats,
+                    warmup,
+                )
             )
     elif op == "cholesky_factor":
         if not _HAS_SKSPARSE:
@@ -204,21 +243,38 @@ def bench_reference(op: str, A_coo: sp.coo_matrix, N: int, repeats: int, warmup:
             if f_status != "ok":
                 rows.append(
                     Result(
-                        op=op, backend="cholmod(np)", device="cpu",
-                        N=N, n=n, nnz=nnz, status=f_status, note=f_note,
+                        op=op,
+                        backend="cholmod(np)",
+                        device="cpu",
+                        N=N,
+                        n=n,
+                        nnz=nnz,
+                        status=f_status,
+                        note=f_note,
                     )
                 )
             else:
                 factor = _sks_cho_factor(A_csc)
                 solve_times, s_status, s_note = time_fn(
-                    lambda: factor.solve(b), warmup=warmup, repeats=repeats, sync=_nosync
+                    lambda: factor.solve(b),
+                    warmup=warmup,
+                    repeats=repeats,
+                    sync=_nosync,
                 )
                 summary = summarize(solve_times)
                 rows.append(
                     Result(
-                        op=op, backend="cholmod(np)", device="cpu",
-                        N=N, n=n, nnz=nnz, status=s_status, note=s_note,
-                        extras={"factor_ms_median": float(statistics.median(factor_times))},
+                        op=op,
+                        backend="cholmod(np)",
+                        device="cpu",
+                        N=N,
+                        n=n,
+                        nnz=nnz,
+                        status=s_status,
+                        note=s_note,
+                        extras={
+                            "factor_ms_median": float(statistics.median(factor_times))
+                        },
                         **summary,
                     )
                 )
@@ -227,7 +283,16 @@ def bench_reference(op: str, A_coo: sp.coo_matrix, N: int, repeats: int, warmup:
             rows.append(_sksparse_unavailable_row(op, N, n, nnz))
         else:
             rows.append(
-                _ref_row(op, "cholmod(np)", N, n, nnz, lambda: _sks_cho_factor(A_csc).logdet(), repeats, warmup)
+                _ref_row(
+                    op,
+                    "cholmod(np)",
+                    N,
+                    n,
+                    nnz,
+                    lambda: _sks_cho_factor(A_csc).logdet(),
+                    repeats,
+                    warmup,
+                )
             )
     return rows
 
@@ -259,11 +324,9 @@ def bench_spmv(N: int, repeats: int, warmup: int, cpu, gpu) -> list[Result]:
             continue
         A = to_sparse_matrix(A_coo, device)
         x = jax.device_put(jnp.asarray(x_np), device)
-        # Don't wrap in jax.jit — SparseMatrix carries numpy `indices` in its
-        # pytree aux, which breaks JIT cache-key hashing. Call eagerly like
-        # the other ops do.
+        spmv_jit = jax.jit(spmv)
         times, status, note = time_fn(
-            lambda: spmv(A, x), warmup=warmup, repeats=repeats
+            lambda: spmv_jit(A, x), warmup=warmup, repeats=repeats
         )
         r = Result(
             op="spmv",
@@ -291,8 +354,9 @@ def bench_spadd(N: int, repeats: int, warmup: int, cpu, gpu) -> list[Result]:
             continue
         A = to_sparse_matrix(A_coo, device)
         B = to_sparse_matrix(B_coo, device)
+        spadd_jit = jax.jit(spadd)
         times, status, note = time_fn(
-            lambda: spadd(A, B), warmup=warmup, repeats=repeats
+            lambda: spadd_jit(A, B), warmup=warmup, repeats=repeats
         )
         r = Result(
             op="spadd",
@@ -319,8 +383,9 @@ def bench_spdmm(N: int, repeats: int, warmup: int, cpu, gpu) -> list[Result]:
             continue
         A = to_sparse_matrix(A_coo, device)
         X = jax.device_put(jnp.asarray(A_coo.todense()), device)
+        spdmm_jit = jax.jit(spdmm)
         times, status, note = time_fn(
-            lambda: spdmm(A, X), warmup=warmup, repeats=repeats
+            lambda: spdmm_jit(A, X), warmup=warmup, repeats=repeats
         )
         out_nnz = int(spspmm(A, A).nnz)
         r = Result(
@@ -399,8 +464,10 @@ def bench_spsolve(N: int, repeats: int, warmup: int, cpu, gpu) -> list[Result]:
                     )
                 )
                 continue
+
+            spsolve_jit = jax.jit(spsolve, static_argnames=["backend"])
             times, status, note = time_fn(
-                lambda bk=bk: spsolve(A, b, backend=bk),
+                lambda bk=bk: spsolve_jit(A, b, backend=bk),
                 warmup=warmup,
                 repeats=repeats,
             )
@@ -478,7 +545,9 @@ def bench_cholesky_factor(N: int, repeats: int, warmup: int, cpu, gpu) -> list[R
     n = N * N
     rng = np.random.default_rng(0)
     b_np = rng.standard_normal(n)
-    results: list[Result] = bench_reference("cholesky_factor", A_coo, N, repeats, warmup)
+    results: list[Result] = bench_reference(
+        "cholesky_factor", A_coo, N, repeats, warmup
+    )
 
     for label, device, backend_list in (
         ("cpu", cpu, CPU_BACKENDS_SOLVE),
@@ -578,8 +647,10 @@ def bench_logdet(N: int, repeats: int, warmup: int, cpu, gpu) -> list[Result]:
                     )
                 )
                 continue
+
+            logdet_jit = jax.jit(logdet, static_argnames=["backend"])
             times, status, note = time_fn(
-                lambda bk=bk: logdet(A, backend=bk),
+                lambda bk=bk: logdet_jit(A, backend=bk),
                 warmup=warmup,
                 repeats=repeats,
             )

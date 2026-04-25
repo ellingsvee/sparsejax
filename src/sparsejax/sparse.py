@@ -8,6 +8,21 @@ import jax.numpy as jnp
 import numpy as np
 
 
+class _HashableIndices:
+    """Wraps the indices ndarray so it can sit in a JIT cache key."""
+
+    __slots__ = ("array",)
+
+    def __init__(self, array: np.ndarray) -> None:
+        self.array = array
+
+    def __hash__(self) -> int:
+        return id(self.array)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _HashableIndices) and other.array is self.array
+
+
 @jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True)
 class SparseMatrix:
@@ -69,13 +84,18 @@ class SparseMatrix:
 
     def tree_flatten(self):
         children = (self.data,)
-        aux = (self.indices, self.shape)
+        aux = (_HashableIndices(self.indices), self.shape)
         return children, aux
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         (data,) = children
-        indices, shape = aux
+        indices_holder, shape = aux
+        indices = (
+            indices_holder.array
+            if isinstance(indices_holder, _HashableIndices)
+            else indices_holder
+        )
         # Avoid re-running __post_init__ shape checks on abstract tracers
         obj = object.__new__(cls)
         object.__setattr__(obj, "data", data)
@@ -85,3 +105,54 @@ class SparseMatrix:
 
     def __repr__(self) -> str:
         return f"SparseMatrix(shape={self.shape}, nnz={self.nnz}, dtype={self.dtype})"
+
+    def __mul__(self, other) -> "SparseMatrix":
+        if isinstance(other, (int, float, jax.Array, jnp.ndarray)):
+            return SparseMatrix(self.data * other, self.indices, self.shape)
+        return NotImplemented
+
+    def __rmul__(self, other) -> "SparseMatrix":
+        return self.__mul__(other)
+
+    def __truediv__(self, other) -> "SparseMatrix":
+        if isinstance(other, (int, float, jax.Array, jnp.ndarray)):
+            return SparseMatrix(self.data / other, self.indices, self.shape)
+        return NotImplemented
+
+    def __add__(self, other) -> jax.Array | "SparseMatrix":
+        # If adding a scalar, the result is dense
+        if (
+            isinstance(other, (int, float, jax.Array, jnp.ndarray))
+            and jnp.ndim(other) == 0
+        ):
+            return self.to_dense() + other
+
+        # If adding another SparseMatrix
+        if isinstance(other, SparseMatrix):
+            from sparsejax.ops.add import spadd
+
+            return spadd(self, other)
+
+        return NotImplemented
+
+    def __radd__(self, other):
+        return self.__add__(other)
+
+    def __neg__(self) -> "SparseMatrix":
+        return SparseMatrix(-self.data, self.indices, self.shape)
+
+    def __matmul__(self, other) -> jax.Array | "SparseMatrix":
+        if isinstance(other, (jax.Array, jnp.ndarray)):
+            from sparsejax.ops.matmul import spdmm
+
+            return spdmm(self, other)
+
+        if isinstance(other, SparseMatrix):
+            from sparsejax.ops.matmul import spspmm
+
+            return spspmm(self, other)
+
+        return NotImplemented
+
+    def __rmatmul__(self, other):
+        return NotImplemented
