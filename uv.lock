@@ -866,7 +866,7 @@ name = "sparsejax"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "jax", extra = ["cuda13"] },
+    { name = "jax" },
     { name = "numpy" },
     { name = "ruff" },
     { name = "scipy" },
@@ -882,6 +882,7 @@ cholmod = [
 ]
 cuda = [
     { name = "cupy-cuda13x" },
+    { name = "jax", extra = ["cuda13"] },
     { name = "nvidia-cudss-cu13" },
     { name = "nvmath-python", extra = ["cu13"] },
 ]
@@ -893,7 +894,8 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "cupy-cuda13x", marker = "extra == 'cuda'" },
-    { name = "jax", extras = ["cuda13"], specifier = ">=0.7" },
+    { name = "jax", specifier = ">=0.7" },
+    { name = "jax", extras = ["cuda13"], marker = "extra == 'cuda'", specifier = ">=0.7" },
     { name = "numpy" },
     { name = "nvidia-cudss-cu13", marker = "extra == 'cuda'" },
     { name = "nvmath-python", extras = ["cu13"], marker = "extra == 'cuda'" },

@@ -4,33 +4,30 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 authors = [
-    { name = "Elling Svee", email = "86355496+ellingsvee@users.noreply.github.com" }
+  { name = "Elling Svee", email = "86355496+ellingsvee@users.noreply.github.com" },
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "jax[cuda13]>=0.7",
-    "numpy",
-    "ruff>=0.15.12",
-    "scipy",
-    "ty>=0.0.32",
+  "jax>=0.7",
+  "numpy",
+  "ruff>=0.15.12",
+  "scipy",
+  "ty>=0.0.32",
 ]
 
 [project.optional-dependencies]
 cholmod = ["scikit-sparse"]
-cuda = ["nvidia-cudss-cu13", "cupy-cuda13x", "nvmath-python[cu13]"]
+cuda = ["jax[cuda13]>=0.7", "nvidia-cudss-cu13", "cupy-cuda13x", "nvmath-python[cu13]"]
 dev = ["pytest>=8", "rich"]
 bench = ["rich"]
 
 [build-system]
 requires = [
-    "scikit-build-core>=0.10",
-    "nanobind>=2.0",
-    "jax>=0.7",
-    # Provides cudss headers + libs in the build env so the native FFI
-    # extension compiles. Harmless on non-CUDA machines — if the wheel
-    # fails to install, CMake falls back to skipping the extension.
-    "nvidia-cudss-cu13; platform_system == 'Linux'",
-    "nvidia-cuda-runtime; platform_system == 'Linux'",
+  "scikit-build-core>=0.10",
+  "nanobind>=2.0",
+  "jax>=0.7",
+  "nvidia-cudss-cu13; platform_system == 'Linux'",
+  "nvidia-cuda-runtime; platform_system == 'Linux'",
 ]
 build-backend = "scikit_build_core.build"
 
@@ -38,10 +35,6 @@ build-backend = "scikit_build_core.build"
 minimum-version = "build-system.requires"
 build-dir = "build/{wheel_tag}"
 wheel.packages = ["src/sparsejax"]
-# The CUDA extension is optional at build time — if cuDSS isn't found we
-# still ship the pure-Python package.
 cmake.args = []
 
 [tool.scikit-build.cmake.define]
-# Users can point the build at a custom cuDSS install:
-#   pip install . -C cmake.define.SPARSEJAX_CUDSS_ROOT=/path/to/cudss
