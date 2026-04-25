@@ -154,16 +154,8 @@ CudssLogdetImpl(cudaStream_t stream, int64_t matrix_type, int64_t factor_token,
                                 cudaGetErrorString(e));
   }
 
-  // The DIAG copy inside cudssDataGet is launched on the cuDSS stream and
-  // completes asynchronously. We sync once so subsequent CUDA ops see the
-  // diagonal in d_diag.
-  if (cudaError_t e = cudaStreamSynchronize(stream); e != cudaSuccess) {
-    cleanup();
-    return ffi::Error::Internal(std::string("cudaStreamSynchronize: ") +
-                                cudaGetErrorString(e));
-  }
-
   // First call with a null buffer to query the required size, then resize.
+  // The size query is host-only and doesn't touch the stream.
   size_t required = 0;
   s = cudssDataGet(entry.handle, entry.data, CUDSS_DATA_DIAG, nullptr, 0,
                    &required);
@@ -181,11 +173,6 @@ CudssLogdetImpl(cudaStream_t stream, int64_t matrix_type, int64_t factor_token,
         e != cudaSuccess) {
       cleanup();
       return ffi::Error::Internal(std::string("cudaMallocAsync(diag,grow): ") +
-                                  cudaGetErrorString(e));
-    }
-    if (cudaError_t e = cudaStreamSynchronize(stream); e != cudaSuccess) {
-      cleanup();
-      return ffi::Error::Internal(std::string("cudaStreamSynchronize: ") +
                                   cudaGetErrorString(e));
     }
   }
@@ -207,14 +194,9 @@ CudssLogdetImpl(cudaStream_t stream, int64_t matrix_type, int64_t factor_token,
         "). This cuDSS build may not expose the factor diagonal for the "
         "requested matrix type.");
   }
-  // cudssDataGet may run its copy asynchronously on the bound stream; ensure
-  // d_diag is fully populated before launching the reduction.
-  if (cudaError_t e = cudaStreamSynchronize(stream); e != cudaSuccess) {
-    cleanup();
-    return ffi::Error::Internal(std::string("cudaStreamSynchronize: ") +
-                                cudaGetErrorString(e));
-  }
-
+  // No host-side sync: cudssDataGet's copy and the reduction kernel are
+  // both queued on `stream`, so the kernel is automatically ordered after
+  // the diag copy completes.
   sparsejax_launch_logabs_sum(stream, d_diag, static_cast<int>(n), scale,
                               out->typed_data());
   if (cudaError_t e = cudaPeekAtLastError(); e != cudaSuccess) {

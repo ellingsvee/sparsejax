@@ -7,9 +7,11 @@ different numerical values — reuse the symbolic factorization.
 
 Tokens are tied to the lifetime of the indices array via a weakref
 finalizer that calls back into the native module to free the cached cuDSS
-state. The mapping from `id(indices)` → token is held in a regular dict
-guarded against pointer reuse by storing the indices object alongside the
-token.
+state. The mapping from `id(indices)` → token is held in a regular dict.
+The cached `CsrStructure` stores a reference to the indices object so a
+lookup that hits a stale entry from id reuse (possible if the original
+indices array wasn't weakref-able and finalize never fired) is detected
+via an identity check and rebuilt.
 """
 
 from __future__ import annotations
@@ -27,6 +29,10 @@ class CsrStructure(NamedTuple):
     order: np.ndarray  # int64, data-permutation (data_csr = data[order])
     shape: Tuple[int, int]
     factor_token: int  # nonzero, stable per indices array
+    # Weak ref to the indices ndarray this structure was built for, used to
+    # detect id reuse on cache lookup. Strong ref would pin `indices` for
+    # the process lifetime and defeat the weakref-finalize cleanup.
+    indices_ref: "weakref.ReferenceType[np.ndarray] | None"
 
 
 # Map id(indices) -> CsrStructure. The cache holds a strong ref to the
@@ -71,7 +77,19 @@ def coo_to_csr(indices: np.ndarray, shape: Tuple[int, int]) -> CsrStructure:
     key = id(indices)
     entry = _CACHE.get(key)
     if entry is not None and entry.shape == shape:
-        return entry
+        # Reject stale entries left behind by id reuse: if the cached
+        # weakref still resolves to a different object, or has expired
+        # while a new ndarray now occupies the same id, we treat it as a
+        # miss. (`indices_ref is None` means the original wasn't
+        # weakref-able; we can't verify identity, so we trust the id and
+        # accept the small id-reuse risk for that path.)
+        cached = entry.indices_ref() if entry.indices_ref is not None else None
+        if entry.indices_ref is None or cached is indices:
+            return entry
+    if entry is not None:
+        # Stale entry — drop the cached cuDSS state too before rebuilding.
+        _native_drop_token(entry.factor_token)
+        _CACHE.pop(key, None)
     row = np.asarray(indices[0], dtype=np.int64)
     col = np.asarray(indices[1], dtype=np.int64)
     n_rows = shape[0]
@@ -84,12 +102,17 @@ def coo_to_csr(indices: np.ndarray, shape: Tuple[int, int]) -> CsrStructure:
     indptr[0] = 0
     np.cumsum(counts, out=indptr[1:])
     token = _alloc_token()
+    try:
+        indices_ref: "weakref.ReferenceType[np.ndarray] | None" = weakref.ref(indices)
+    except TypeError:
+        indices_ref = None
     csr = CsrStructure(
         indptr=indptr,
         col_idx=col_sorted.astype(np.int32, copy=False),
         order=order,
         shape=shape,
         factor_token=token,
+        indices_ref=indices_ref,
     )
     _CACHE[key] = csr
     try:

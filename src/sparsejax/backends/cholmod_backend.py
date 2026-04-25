@@ -19,16 +19,25 @@ def _require_cholmod():
 
 
 class _CachedFactor:
-    __slots__ = ("factor", "shape")
+    __slots__ = ("factor", "shape", "indices_ref")
 
-    def __init__(self, factor, shape):
+    def __init__(self, factor, shape, indices_ref):
         self.factor = factor
         self.shape = shape
+        # Weak ref to the indices ndarray; strong ref would pin it for
+        # the process lifetime and defeat weakref-finalize cleanup.
+        self.indices_ref = indices_ref
 
 
-_FACTOR_CACHE: "weakref.WeakValueDictionary[int, _CachedFactor]" = (
-    weakref.WeakValueDictionary()
-)
+# Map id(indices) -> _CachedFactor. Strong-ref dict (a previous
+# WeakValueDictionary design dropped entries instantly because nothing
+# else held a strong reference, silently invalidating the cache on every
+# call). Lifetime is tied to the indices array via weakref.finalize.
+_FACTOR_CACHE: dict[int, _CachedFactor] = {}
+
+
+def _on_indices_collected(key: int) -> None:
+    _FACTOR_CACHE.pop(key, None)
 
 
 def _get_or_build_factor(data_np: np.ndarray, indices: np.ndarray, shape):
@@ -40,16 +49,31 @@ def _get_or_build_factor(data_np: np.ndarray, indices: np.ndarray, shape):
 
     key = id(indices)
     entry = _FACTOR_CACHE.get(key)
+    # Reject stale entries from id reuse: if the cached weakref no longer
+    # resolves to `indices`, treat as a miss. `indices_ref is None` means
+    # the original wasn't weakref-able; we can't verify identity in that
+    # case and accept the small id-reuse risk.
+    if entry is not None and entry.indices_ref is not None:
+        cached = entry.indices_ref()
+        if cached is not indices:
+            _FACTOR_CACHE.pop(key, None)
+            entry = None
     # scikit-sparse may need writable buffers internally — callback inputs
     # are read-only, so copy once here.
     data_w = np.array(data_np, copy=True)
     A = sp.coo_matrix((data_w, (indices[0], indices[1])), shape=shape).tocsc()
     if entry is None or entry.shape != shape:
         factor = cho_factor(A)
-        entry = _CachedFactor(factor, shape)
         try:
-            _FACTOR_CACHE[key] = entry
+            indices_ref = weakref.ref(indices)
         except TypeError:
+            indices_ref = None
+        entry = _CachedFactor(factor, shape, indices_ref)
+        _FACTOR_CACHE[key] = entry
+        try:
+            weakref.finalize(indices, _on_indices_collected, key)
+        except TypeError:
+            # Object isn't weakref-able — fall back to leaking the entry.
             pass
     else:
         # numerical refactorization on the cached symbolic ordering
