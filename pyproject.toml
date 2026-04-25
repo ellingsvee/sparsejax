@@ -7,17 +7,16 @@ authors = [
   { name = "Elling Svee", email = "86355496+ellingsvee@users.noreply.github.com" },
 ]
 requires-python = ">=3.11"
-dependencies = [
-  "jax>=0.7",
-  "numpy",
-  "ruff>=0.15.12",
-  "scipy",
-  "ty>=0.0.32",
-]
+dependencies = ["jax>=0.7", "numpy", "ruff>=0.15.12", "scipy", "ty>=0.0.32"]
 
 [project.optional-dependencies]
 cholmod = ["scikit-sparse"]
-cuda = ["jax[cuda13]>=0.7", "nvidia-cudss-cu13", "cupy-cuda13x", "nvmath-python[cu13]"]
+cuda = [
+  "jax[cuda13]>=0.7",
+  "nvidia-cudss-cu13",
+  "cupy-cuda13x",
+  "nvmath-python[cu13]",
+]
 dev = ["pytest>=8", "rich"]
 bench = ["rich"]
 
