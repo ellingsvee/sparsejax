@@ -47,6 +47,46 @@ def solve(
     )
 
 
+def solve_and_logdet(
+    data, indices, shape: Tuple[int, int], b
+) -> tuple[jax.Array, jax.Array]:
+    out_shape = b.shape
+    out_dtype = jnp.result_type(data.dtype, b.dtype)
+    ld_dtype = data.dtype
+    row = np.asarray(indices[0])
+    col = np.asarray(indices[1])
+
+    def _host(data_h, b_h):
+        import scipy.sparse.linalg as spla
+
+        A = _to_csr(np.asarray(data_h), row, col, shape)
+        b_np = np.asarray(b_h)
+        lu = spla.splu(A.tocsc())
+        x = lu.solve(b_np)
+        diag_u = lu.U.diagonal()
+        sign = float(lu.perm_r.size and 1.0)
+        if np.any(diag_u == 0):
+            ld = np.nan
+        else:
+            ld = np.sum(np.log(np.abs(diag_u)))
+            if sign <= 0:
+                ld = np.nan
+        x = np.asarray(x).astype(out_dtype, copy=False)
+        if x.shape != out_shape:
+            x = x.reshape(out_shape)
+        return x, np.asarray(ld, dtype=ld_dtype)
+
+    return jax.pure_callback(
+        _host,
+        (
+            jax.ShapeDtypeStruct(out_shape, out_dtype),
+            jax.ShapeDtypeStruct((), ld_dtype),
+        ),
+        data,
+        b,
+    )
+
+
 def logdet(data, indices, shape: Tuple[int, int]) -> jax.Array:
     """Log-determinant via dense LU (only suitable for small matrices)."""
     row = np.asarray(indices[0])

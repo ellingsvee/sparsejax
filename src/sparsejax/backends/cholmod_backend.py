@@ -106,6 +106,36 @@ def cholesky_solve(
     )
 
 
+def cholesky_solve_and_logdet(
+    data: jax.Array,
+    indices: np.ndarray,
+    shape: tuple[int, int],
+    b: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    x_shape = b.shape
+    out_dtype = jnp.result_type(data.dtype, b.dtype)
+    ld_dtype = data.dtype
+
+    def _host(data_h, b_h):
+        factor = _get_or_build_factor(np.asarray(data_h), indices, shape)
+        x = factor.solve(np.array(b_h, copy=True))
+        x = np.asarray(x).astype(out_dtype, copy=False)
+        if x.shape != x_shape:
+            x = x.reshape(x_shape)
+        ld = np.asarray(factor.logdet(), dtype=ld_dtype)
+        return x, ld
+
+    return jax.pure_callback(
+        _host,
+        (
+            jax.ShapeDtypeStruct(x_shape, out_dtype),
+            jax.ShapeDtypeStruct((), ld_dtype),
+        ),
+        data,
+        b,
+    )
+
+
 def logdet(
     data: jax.Array,
     indices: np.ndarray,

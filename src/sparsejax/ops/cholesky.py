@@ -38,6 +38,29 @@ def _dispatch_chol_solve(
     raise ValueError(f"unknown cholesky backend: {backend_name!r}")
 
 
+def _dispatch_chol_solve_and_logdet(
+    backend_name: str,
+    data: jax.Array,
+    indices: np.ndarray,
+    shape: tuple,
+    b: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    if backend_name == "cholmod":
+        from sparsejax.backends import cholmod_backend
+
+        return cholmod_backend.cholesky_solve_and_logdet(data, indices, shape, b)
+    if backend_name == "scipy":
+        from sparsejax.backends import scipy_backend
+
+        return scipy_backend.solve_and_logdet(data, indices, shape, b)
+
+    x = _dispatch_chol_solve(backend_name, data, indices, shape, b)
+    from .logdet import _dispatch_logdet
+
+    ld = _dispatch_logdet(backend_name, data, indices, shape)
+    return x, ld
+
+
 @partial(jax.custom_vjp, nondiff_argnums=(2, 3, 4))
 def _cholesky_solve_impl(
     data: jax.Array,
@@ -70,6 +93,62 @@ def _cholesky_solve_bwd(indices, shape, backend_name, residuals, g):
 _cholesky_solve_impl.defvjp(_cholesky_solve_fwd, _cholesky_solve_bwd)
 
 
+@partial(jax.custom_vjp, nondiff_argnums=(2, 3, 4))
+def _cholesky_solve_and_logdet_impl(
+    data: jax.Array,
+    b: jax.Array,
+    indices: np.ndarray,
+    shape: tuple,
+    backend_name: str,
+):
+    return _dispatch_chol_solve_and_logdet(backend_name, data, indices, shape, b)
+
+
+def _cholesky_solve_and_logdet_fwd(data, b, indices, shape, backend_name):
+    x, ld = _dispatch_chol_solve_and_logdet(backend_name, data, indices, shape, b)
+    return (x, ld), (data, x)
+
+
+def _cholesky_solve_and_logdet_bwd(indices, shape, backend_name, residuals, g):
+    data, x = residuals
+    gx, gld = g
+    row_idx = indices[0]
+    col_idx = indices[1]
+    row_arr = np.asarray(row_idx, dtype=np.int64)
+    col_arr = np.asarray(col_idx, dtype=np.int64)
+    n = shape[0]
+
+    unique_cols, inv_idx = np.unique(col_arr, return_inverse=True)
+    E = jax.nn.one_hot(unique_cols, n, dtype=data.dtype).T
+
+    if backend_name in ("cholmod", "scipy"):
+        if gx.ndim == 1:
+            gx_cols = 1
+            gx_rhs = gx[:, None]
+        else:
+            gx_cols = gx.shape[1]
+            gx_rhs = gx
+        rhs = jnp.concatenate([gx_rhs, E], axis=1)
+        sol = _dispatch_chol_solve(backend_name, data, indices, shape, rhs)
+        lam_mat = sol[:, :gx_cols]
+        inv_cols = sol[:, gx_cols:]
+        lam = lam_mat[:, 0] if gx.ndim == 1 else lam_mat
+    else:
+        lam = _dispatch_chol_solve(backend_name, data, indices, shape, gx)
+        inv_cols = _dispatch_chol_solve(backend_name, data, indices, shape, E)
+
+    solve_g_data = -lam[row_idx] * x[col_idx]
+    if solve_g_data.ndim == 2:
+        solve_g_data = solve_g_data.sum(axis=-1)
+    logdet_g_data = gld * inv_cols[jnp.asarray(row_arr), jnp.asarray(inv_idx)]
+    return (solve_g_data + logdet_g_data, lam)
+
+
+_cholesky_solve_and_logdet_impl.defvjp(
+    _cholesky_solve_and_logdet_fwd, _cholesky_solve_and_logdet_bwd
+)
+
+
 def cholesky_solve(
     A: SparseMatrix,
     b: jax.Array,
@@ -85,6 +164,26 @@ def cholesky_solve(
         raise ValueError(f"shape mismatch: A is {A.shape}, b is {b.shape}")
     backend_name = _resolve_backend(A, backend)
     return _cholesky_solve_impl(A.data, b, A.indices, A.shape, backend_name)
+
+
+def cholesky_solve_and_logdet(
+    A: SparseMatrix,
+    b: jax.Array,
+    *,
+    backend: str | None = "auto",
+) -> tuple[jax.Array, jax.Array]:
+    """Solve ``A x = b`` and return ``(x, logdet(A))`` from one factorization.
+
+    On the CHOLMOD backend this is a single host callback and a single numeric
+    factorization in the forward pass. Its VJP batches the solve cotangent and
+    logdet inverse-column solve into one backend solve.
+    """
+    if b.shape[0] != A.shape[0]:
+        raise ValueError(f"shape mismatch: A is {A.shape}, b is {b.shape}")
+    if A.shape[0] != A.shape[1]:
+        raise ValueError(f"logdet requires square matrix, got {A.shape}")
+    backend_name = _resolve_backend(A, backend)
+    return _cholesky_solve_and_logdet_impl(A.data, b, A.indices, A.shape, backend_name)
 
 
 class CholeskyFactor:

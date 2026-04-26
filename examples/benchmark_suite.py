@@ -38,6 +38,7 @@ from sparsejax import (
     spspmm,
     spdmm,
     cholesky_factor,
+    cholesky_solve_and_logdet,
 )
 
 
@@ -413,8 +414,9 @@ def bench_spspmm(N: int, repeats: int, warmup: int, cpu, gpu) -> list[Result]:
         if device is None:
             continue
         A = to_sparse_matrix(A_coo, device)
+        spspmm_jit = jax.jit(spspmm)
         times, status, note = time_fn(
-            lambda: spspmm(A, A), warmup=warmup, repeats=repeats
+            lambda: spspmm_jit(A, A), warmup=warmup, repeats=repeats
         )
         out_nnz = int(spspmm(A, A).nnz)
         r = Result(
@@ -518,14 +520,90 @@ def bench_cholesky_solve(N: int, repeats: int, warmup: int, cpu, gpu) -> list[Re
                     )
                 )
                 continue
+            cholesky_solve_jit = jax.jit(cholesky_solve, static_argnames=["backend"])
             times, status, note = time_fn(
-                lambda bk=bk: cholesky_solve(A, b, backend=bk),
+                lambda bk=bk: cholesky_solve_jit(A, b, backend=bk),
                 warmup=warmup,
                 repeats=repeats,
             )
             results.append(
                 Result(
                     op="cholesky_solve",
+                    backend=bk,
+                    device=label,
+                    N=N,
+                    n=n,
+                    nnz=A.nnz,
+                    status=status,
+                    note=note,
+                    **summarize(times),
+                )
+            )
+    return results
+
+
+def bench_cholesky_solve_and_logdet(
+    N: int, repeats: int, warmup: int, cpu, gpu
+) -> list[Result]:
+    A_coo = laplacian_2d(N)
+    A_csc = A_coo.tocsc()
+    n = N * N
+    rng = np.random.default_rng(0)
+    b_np = rng.standard_normal(n)
+    results: list[Result] = []
+    if _HAS_SKSPARSE:
+        results.append(
+            _ref_row(
+                "cholesky_solve_and_logdet",
+                "cholmod(np)",
+                N,
+                n,
+                A_coo.nnz,
+                lambda: (lambda f: (f.solve(b_np), f.logdet()))(_sks_cho_factor(A_csc)),
+                repeats,
+                warmup,
+            )
+        )
+    else:
+        results.append(
+            _sksparse_unavailable_row("cholesky_solve_and_logdet", N, n, A_coo.nnz)
+        )
+
+    for label, device, backend_list in (
+        ("cpu", cpu, CPU_BACKENDS_SOLVE),
+        ("gpu", gpu, GPU_BACKENDS_SOLVE),
+    ):
+        if device is None:
+            continue
+        A = to_sparse_matrix(A_coo, device)
+        b = jax.device_put(jnp.asarray(b_np), device)
+
+        for bk in backend_list:
+            if not backends.is_available(cast(BackendName, bk)):
+                results.append(
+                    Result(
+                        op="cholesky_solve_and_logdet",
+                        backend=bk,
+                        device=label,
+                        N=N,
+                        n=n,
+                        nnz=A.nnz,
+                        status="skip",
+                        note="backend unavailable",
+                    )
+                )
+                continue
+            combined_jit = jax.jit(
+                cholesky_solve_and_logdet, static_argnames=["backend"]
+            )
+            times, status, note = time_fn(
+                lambda bk=bk: combined_jit(A, b, backend=bk),
+                warmup=warmup,
+                repeats=repeats,
+            )
+            results.append(
+                Result(
+                    op="cholesky_solve_and_logdet",
                     backend=bk,
                     device=label,
                     N=N,
@@ -677,6 +755,7 @@ OPS = {
     "spspmm": bench_spspmm,
     "spsolve": bench_spsolve,
     "cholesky_solve": bench_cholesky_solve,
+    "cholesky_solve_and_logdet": bench_cholesky_solve_and_logdet,
     "cholesky_factor": bench_cholesky_factor,
     "logdet": bench_logdet,
 }

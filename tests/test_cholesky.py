@@ -8,7 +8,13 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from sparsejax import SparseMatrix, cholesky_solve, cholesky_factor, logdet
+from sparsejax import (
+    SparseMatrix,
+    cholesky_solve,
+    cholesky_solve_and_logdet,
+    cholesky_factor,
+    logdet,
+)
 
 from setup import (
     AVAILABLE_SPD_BACKENDS,
@@ -89,6 +95,44 @@ def test_cholesky_factor_reuse(backend):
     np.testing.assert_allclose(
         np.asarray(x2), np.linalg.solve(A_dense, np.asarray(b2)), atol=ATOL
     )
+
+
+@pytest.mark.parametrize("backend", AVAILABLE_SPD_BACKENDS)
+class TestCholeskySolveAndLogdet:
+    def test_forward(self, backend):
+        device = _device_for(backend)
+        A_dense = _make_spd(6, seed=8)
+        A = _dense_to_sparse(A_dense, device)
+        b = _put(np.arange(1.0, 7.0), device)
+        x, ld = cholesky_solve_and_logdet(A, b, backend=backend)
+        np.testing.assert_allclose(
+            np.asarray(x), np.linalg.solve(A_dense, np.asarray(b)), atol=ATOL
+        )
+        np.testing.assert_allclose(float(ld), np.linalg.slogdet(A_dense)[1], atol=ATOL)
+
+    def test_grad_matches_dense(self, backend):
+        device = _device_for(backend)
+        A_dense = _make_spd(5, seed=9)
+        rows, cols = np.nonzero(np.ones_like(A_dense))
+        indices = np.stack([rows, cols]).astype(np.int32)
+        data = jax.device_put(jnp.asarray(A_dense[rows, cols]), device)
+        b = jax.device_put(jnp.array([1.0, -0.5, 0.25, 2.0, 0.75]), device)
+
+        def loss_sparse(d, b):
+            A = SparseMatrix(data=d, indices=indices, shape=A_dense.shape)
+            x, ld = cholesky_solve_and_logdet(A, b, backend=backend)
+            return jnp.sum(x**2) + 0.3 * ld
+
+        def loss_dense(flat, b):
+            mat = flat.reshape(A_dense.shape)
+            x = jnp.linalg.solve(mat, b)
+            _, ld = jnp.linalg.slogdet(mat)
+            return jnp.sum(x**2) + 0.3 * ld
+
+        g_sp = jax.grad(loss_sparse, argnums=(0, 1))(data, b)
+        g_de = jax.grad(loss_dense, argnums=(0, 1))(data, b)
+        np.testing.assert_allclose(np.asarray(g_sp[0]), np.asarray(g_de[0]), atol=ATOL)
+        np.testing.assert_allclose(np.asarray(g_sp[1]), np.asarray(g_de[1]), atol=ATOL)
 
 
 @pytest.mark.parametrize("backend", AVAILABLE_SPD_BACKENDS)
