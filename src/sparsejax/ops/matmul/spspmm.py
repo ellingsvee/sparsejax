@@ -23,6 +23,20 @@ class _PatternCacheEntry:
 _PATTERN_CACHE: dict[tuple[int, tuple, int, tuple], _PatternCacheEntry] = {}
 
 
+def _is_gpu_oom(e: BaseException) -> bool:
+    name = type(e).__name__.lower()
+    msg = str(e).lower()
+    return "outofmemory" in name or "out of memory" in msg
+
+
+def _output_index_dtype(*arrays: np.ndarray, shape: tuple) -> np.dtype:
+    if max(shape) > np.iinfo(np.int32).max:
+        return np.dtype(np.int64)
+    if any(np.asarray(a).dtype == np.dtype(np.int64) for a in arrays):
+        return np.dtype(np.int64)
+    return np.dtype(np.int32)
+
+
 def _drop_pattern_cache(key) -> None:
     _PATTERN_CACHE.pop(key, None)
 
@@ -65,7 +79,22 @@ def _dispatch_spspmm(
                 b_col,
                 b_shape,
             )
-        except (ImportError, RuntimeError):
+        except (ImportError, RuntimeError, MemoryError):
+            from sparsejax.backends import scipy_backend
+
+            return scipy_backend.spspmm(
+                a_data,
+                a_row,
+                a_col,
+                a_shape,
+                b_data,
+                b_row,
+                b_col,
+                b_shape,
+            )
+        except Exception as e:
+            if not _is_gpu_oom(e):
+                raise
             from sparsejax.backends import scipy_backend
 
             return scipy_backend.spspmm(
@@ -79,6 +108,15 @@ def _dispatch_spspmm(
                 b_shape,
             )
     raise ValueError(f"unknown spspmm backend: {backend_name!r}")
+
+
+def _resolve_spspmm_backend(A: SparseMatrix, backend: str | None) -> str:
+    if backend is None or backend == "auto":
+        # Dynamic-output SpGEMM currently runs through a host callback. Routing
+        # that callback to CuPy can require very large cuSPARSE work buffers,
+        # while SciPy only sees host arrays already materialized by the callback.
+        return "scipy"
+    return _resolve_backend(A, backend)
 
 
 def _compute_pattern(
@@ -109,10 +147,15 @@ def _compute_pattern(
     n_cols = b_shape[1]
     lin = C_pat.row.astype(np.int64) * n_cols + C_pat.col.astype(np.int64)
     order = np.argsort(lin)
+    index_dtype = _output_index_dtype(
+        a_indices,
+        b_indices,
+        shape=(a_shape[0], b_shape[1]),
+    )
     return np.stack(
         [
-            np.asarray(C_pat.row, dtype=np.int32)[order],
-            np.asarray(C_pat.col, dtype=np.int32)[order],
+            np.asarray(C_pat.row, dtype=index_dtype)[order],
+            np.asarray(C_pat.col, dtype=index_dtype)[order],
         ],
         axis=0,
     )
@@ -348,7 +391,7 @@ def spspmm(
 ) -> SparseMatrix:
     if A.shape[1] != B.shape[0]:
         raise ValueError(f"shape mismatch: A {A.shape} @ B {B.shape}")
-    backend_name = _resolve_backend(A, backend)
+    backend_name = _resolve_spspmm_backend(A, backend)
     c_shape = (A.shape[0], B.shape[1])
     c_indices = _cached_pattern(A.indices, A.shape, B.indices, B.shape)
     c_data = _spspmm_impl(

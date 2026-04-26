@@ -85,12 +85,13 @@ def _call_cudss(
     m, n = shape
     if m != n:
         raise ValueError(f"cuDSS requires square matrix, got {shape}")
-    csr = coo_to_csr(indices, shape)
+    # Current native handlers bind ffi::Buffer<S32> and CUDA_R_32I.
+    csr = coo_to_csr(indices, shape, index_dtype=np.int32)
     # Permute the traced data onto CSR layout in-graph.
     data_csr = data[csr.order]
     # Broadcast static int arrays onto the right device as jnp arrays.
-    row_ptr = jnp.asarray(csr.indptr, dtype=jnp.int32)
-    col_idx = jnp.asarray(csr.col_idx, dtype=jnp.int32)
+    row_ptr = jnp.asarray(csr.indptr)
+    col_idx = jnp.asarray(csr.col_idx)
 
     # cuDSS handler is F64 only; cast b/data if needed.
     data_csr = data_csr.astype(jnp.float64)
@@ -152,10 +153,11 @@ def cholesky_solve_and_logdet(
     m, n = shape
     if m != n:
         raise ValueError(f"cuDSS requires square matrix, got {shape}")
-    csr = coo_to_csr(indices, shape)
+    # Current native handlers bind ffi::Buffer<S32> and CUDA_R_32I.
+    csr = coo_to_csr(indices, shape, index_dtype=np.int32)
     data_csr = data[csr.order].astype(jnp.float64)
-    row_ptr = jnp.asarray(csr.indptr, dtype=jnp.int32)
-    col_idx = jnp.asarray(csr.col_idx, dtype=jnp.int32)
+    row_ptr = jnp.asarray(csr.indptr)
+    col_idx = jnp.asarray(csr.col_idx)
     b64 = b.astype(jnp.float64)
 
     ffi_fn = jax.ffi.ffi_call(
@@ -213,10 +215,11 @@ def logdet(
 
     from sparsejax._csr import coo_to_csr
 
-    csr = coo_to_csr(indices, shape)
+    # Current native handlers bind ffi::Buffer<S32> and CUDA_R_32I.
+    csr = coo_to_csr(indices, shape, index_dtype=np.int32)
     data_csr = data[csr.order].astype(jnp.float64)
-    row_ptr = jnp.asarray(csr.indptr, dtype=jnp.int32)
-    col_idx = jnp.asarray(csr.col_idx, dtype=jnp.int32)
+    row_ptr = jnp.asarray(csr.indptr)
+    col_idx = jnp.asarray(csr.col_idx)
 
     out_dtype = jnp.float64
     ffi_fn = jax.ffi.ffi_call(

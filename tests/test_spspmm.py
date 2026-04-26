@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib
+
 import jax
 
 jax.config.update("jax_enable_x64", True)
@@ -9,6 +11,8 @@ import numpy as np
 import pytest
 
 from sparsejax import SparseMatrix, spspmm
+
+spspmm_module = importlib.import_module("sparsejax.ops.matmul.spspmm")
 
 
 def _backends():
@@ -24,6 +28,19 @@ def _backends():
     except RuntimeError:
         pass
     return out
+
+
+def test_spspmm_auto_prefers_host_backend_for_dynamic_spgemm(monkeypatch):
+    A = SparseMatrix.from_coo([1.0], [0], [0], (1, 1))
+
+    monkeypatch.setattr(
+        spspmm_module,
+        "_resolve_backend",
+        lambda *_args, **_kwargs: "cudss_ffi",
+    )
+
+    assert spspmm_module._resolve_spspmm_backend(A, "auto") == "scipy"
+    assert spspmm_module._resolve_spspmm_backend(A, None) == "scipy"
 
 
 @pytest.mark.parametrize("backend", _backends())

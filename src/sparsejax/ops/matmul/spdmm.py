@@ -27,10 +27,11 @@ def _spdmm_via_ffi(
     """
     from sparsejax.backends import _cusparse_lowering as cusp
 
-    csr = coo_to_csr(indices, shape)
+    # jaxlib's CSR sparse FFI descriptors used here are int32-indexed.
+    csr = coo_to_csr(indices, shape, index_dtype=np.int32)
     data_csr = data[csr.order]
-    indptr = jnp.asarray(csr.indptr, dtype=jnp.int32)
-    col_idx = jnp.asarray(csr.col_idx, dtype=jnp.int32)
+    indptr = jnp.asarray(csr.indptr)
+    col_idx = jnp.asarray(csr.col_idx)
     if X.ndim == 1:
         return cusp.csr_matvec(
             data_csr,

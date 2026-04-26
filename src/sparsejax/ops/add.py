@@ -8,6 +8,14 @@ import numpy as np
 from sparsejax.sparse import SparseMatrix
 
 
+def _output_index_dtype(*arrays: np.ndarray, shape: Tuple[int, int]) -> np.dtype:
+    if max(shape) > np.iinfo(np.int32).max:
+        return np.dtype(np.int64)
+    if any(np.asarray(a).dtype == np.dtype(np.int64) for a in arrays):
+        return np.dtype(np.int64)
+    return np.dtype(np.int32)
+
+
 def _union_pattern(
     a_indices: np.ndarray,
     b_indices: np.ndarray,
@@ -22,8 +30,9 @@ def _union_pattern(
     uniq, inv = np.unique(combined, return_inverse=True)
     a_to_c = inv[: a_lin.shape[0]]
     b_to_c = inv[a_lin.shape[0] :]
-    rows = (uniq // n_cols).astype(np.int32)
-    cols = (uniq % n_cols).astype(np.int32)
+    index_dtype = _output_index_dtype(a_indices, b_indices, shape=shape)
+    rows = (uniq // n_cols).astype(index_dtype)
+    cols = (uniq % n_cols).astype(index_dtype)
     c_indices = np.stack([rows, cols], axis=0)
     return c_indices, a_to_c.astype(np.int64), b_to_c.astype(np.int64)
 
