@@ -1,17 +1,9 @@
-"""COO → CSR conversion + per-pattern factor token issuance.
+"""COO to CSR conversion + per-pattern factor token issuance.
 
 A factor token is a stable, process-unique int64 that identifies a sparsity
 pattern. Native FFI backends (cuDSS) use it as a cache key for the cuDSS
 analysis phase, so repeated calls with the same indices array — even with
 different numerical values — reuse the symbolic factorization.
-
-Tokens are tied to the lifetime of the indices array via a weakref
-finalizer that calls back into the native module to free the cached cuDSS
-state. The mapping from `id(indices)` → token is held in a regular dict.
-The cached `CsrStructure` stores a reference to the indices object so a
-lookup that hits a stale entry from id reuse (possible if the original
-indices array wasn't weakref-able and finalize never fired) is detected
-via an identity check and rebuilt.
 """
 
 from __future__ import annotations
@@ -24,8 +16,8 @@ import numpy as np
 
 
 class CsrStructure(NamedTuple):
-    indptr: np.ndarray  # int32, shape (n_rows + 1,)
-    col_idx: np.ndarray  # int32, shape (nnz,)
+    indptr: np.ndarray  # int32/int64, shape (n_rows + 1,)
+    col_idx: np.ndarray  # int32/int64, shape (nnz,)
     order: np.ndarray  # int64, data-permutation (data_csr = data[order])
     shape: Tuple[int, int]
     factor_token: int  # nonzero, stable per indices array
@@ -35,13 +27,13 @@ class CsrStructure(NamedTuple):
     indices_ref: "weakref.ReferenceType[np.ndarray] | None"
 
 
-# Map id(indices) -> CsrStructure. The cache holds a strong ref to the
-# CsrStructure (the previous WeakValueDictionary design dropped it
+# Map (id(indices), index_dtype) -> CsrStructure. The cache holds a strong ref
+# to the CsrStructure (the previous WeakValueDictionary design dropped it
 # instantly because nothing else held one, which silently invalidated the
 # factor_token across calls). Lifetime is tied to the indices array via
 # weakref.finalize, which removes the entry — and frees the cuDSS cached
 # state — when indices is GC'd.
-_CACHE: dict[int, CsrStructure] = {}
+_CACHE: dict[tuple[int, str], CsrStructure] = {}
 _TOKEN_LOCK = threading.Lock()
 _NEXT_TOKEN = 1
 
@@ -68,13 +60,68 @@ def _native_drop_token(token: int) -> None:
             pass
 
 
-def _on_indices_collected(key: int, token: int) -> None:
+def _on_indices_collected(key: tuple[int, str], token: int) -> None:
     _CACHE.pop(key, None)
     _native_drop_token(token)
 
 
-def coo_to_csr(indices: np.ndarray, shape: Tuple[int, int]) -> CsrStructure:
-    key = id(indices)
+def _normalize_index_dtype(index_dtype) -> np.dtype:
+    dt = np.dtype(index_dtype)
+    if dt not in (np.dtype(np.int32), np.dtype(np.int64)):
+        raise TypeError(f"index_dtype must be int32 or int64, got {dt}")
+    return dt
+
+
+def _pick_index_dtype(
+    indices: np.ndarray, shape: Tuple[int, int], nnz: int
+) -> np.dtype:
+    max_i32 = np.iinfo(np.int32).max
+    if indices.dtype == np.dtype(np.int64):
+        return np.dtype(np.int64)
+    if nnz > max_i32 or max(shape) > max_i32:
+        return np.dtype(np.int64)
+    return np.dtype(np.int32)
+
+
+def _check_index_capacity(
+    indices: np.ndarray,
+    shape: Tuple[int, int],
+    nnz: int,
+    index_dtype: np.dtype,
+) -> None:
+    if indices.size and np.min(indices) < 0:
+        raise ValueError("sparse indices must be non-negative")
+    if index_dtype != np.dtype(np.int32):
+        return
+    max_i32 = np.iinfo(np.int32).max
+    if nnz > max_i32:
+        raise OverflowError(
+            f"nnz={nnz} exceeds int32 sparse index capacity; use int64 indices"
+        )
+    if max(shape) > max_i32:
+        raise OverflowError(
+            f"shape={shape} exceeds int32 sparse index capacity; use int64 indices"
+        )
+    if indices.size and np.max(indices) > max_i32:
+        raise OverflowError(
+            "sparse index value exceeds int32 capacity; use int64 indices"
+        )
+
+
+def coo_to_csr(
+    indices: np.ndarray,
+    shape: Tuple[int, int],
+    *,
+    index_dtype=None,
+) -> CsrStructure:
+    dt = (
+        _pick_index_dtype(indices, shape, indices.shape[1])
+        if index_dtype is None
+        else _normalize_index_dtype(index_dtype)
+    )
+    _check_index_capacity(indices, shape, indices.shape[1], dt)
+
+    key = (id(indices), dt.str)
     entry = _CACHE.get(key)
     if entry is not None and entry.shape == shape:
         # Reject stale entries left behind by id reuse: if the cached
@@ -98,7 +145,7 @@ def coo_to_csr(indices: np.ndarray, shape: Tuple[int, int]) -> CsrStructure:
     row_sorted = row[order]
     col_sorted = col[order]
     counts = np.bincount(row_sorted, minlength=n_rows)
-    indptr = np.empty(n_rows + 1, dtype=np.int32)
+    indptr = np.empty(n_rows + 1, dtype=dt)
     indptr[0] = 0
     np.cumsum(counts, out=indptr[1:])
     token = _alloc_token()
@@ -108,7 +155,7 @@ def coo_to_csr(indices: np.ndarray, shape: Tuple[int, int]) -> CsrStructure:
         indices_ref = None
     csr = CsrStructure(
         indptr=indptr,
-        col_idx=col_sorted.astype(np.int32, copy=False),
+        col_idx=col_sorted.astype(dt, copy=False),
         order=order,
         shape=shape,
         factor_token=token,

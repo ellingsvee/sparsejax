@@ -14,7 +14,7 @@ Backends are pluggable. The current default on CPU is SciPy (via
 JAX FFI — see ``csrc/README.md``.
 """
 
-from .sparse import SparseMatrix
+from .sparse import SparseMatrix, SparseStructure
 from .ops import (
     spmv,
     spdmm,
@@ -31,6 +31,7 @@ from . import backends
 
 __all__ = [
     "SparseMatrix",
+    "SparseStructure",
     "spmv",
     "spdmm",
     "spspmm",
