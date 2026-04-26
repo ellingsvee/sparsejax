@@ -63,16 +63,17 @@ def _logdet_fwd(data, indices, shape, backend_name):
 def _logdet_bwd(indices, shape, backend_name, residuals, g):
     (data,) = residuals
 
-    # TODO: Here we need to implement the partial inverse. The current approach for solving against identity is suboptimal.
-    # Solve A X = I (restricted to unique column set) to get selected
-    # entries of A^{-1}. For SPD, A^{-1} is symmetric; we need A^{-1}[row,col]
-    # at every entry of the pattern.
-    col_arr = np.asarray(indices[1], dtype=np.int64)
+    # We need A^{-1} only at A's nonzero pattern. Solve A X = E where the
+    # columns of E are the standard basis vectors for the unique columns
+    # appearing in A.indices[1], then gather A^{-1}[row[k], col[k]] from
+    # X[row[k], inv_idx[k]].
     row_arr = np.asarray(indices[0], dtype=np.int64)
+    col_arr = np.asarray(indices[1], dtype=np.int64)
     n = shape[0]
-    I = jnp.eye(n, dtype=data.dtype)
-    A_inv = _dispatch_chol_solve(backend_name, data, indices, shape, I)
-    g_data = g * A_inv[row_arr, col_arr]
+    unique_cols, inv_idx = np.unique(col_arr, return_inverse=True)
+    E = jax.nn.one_hot(unique_cols, n, dtype=data.dtype).T
+    X = _dispatch_chol_solve(backend_name, data, indices, shape, E)
+    g_data = g * X[jnp.asarray(row_arr), jnp.asarray(inv_idx)]
     return (g_data,)
 
 
