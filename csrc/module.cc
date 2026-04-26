@@ -1,4 +1,5 @@
 #include "cudss_logdet.h"
+#include "cudss_solve_logdet.h"
 #include "cudss_spd_solve.h"
 #include "cudss_state.h"
 
@@ -31,6 +32,20 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(CudssLogdet, CudssLogdetImpl,
                                   .Ret<ffi::Buffer<ffi::F64>>() // out (scalar)
 );
 
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    CudssSolveLogdet, CudssSolveLogdetImpl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("matrix_type")
+        .Attr<int64_t>("factor_token")
+        .Arg<ffi::Buffer<ffi::S32>>() // row_ptr
+        .Arg<ffi::Buffer<ffi::S32>>() // col_idx
+        .Arg<ffi::Buffer<ffi::F64>>() // data
+        .Arg<ffi::Buffer<ffi::F64>>() // b
+        .Ret<ffi::Buffer<ffi::F64>>() // x
+        .Ret<ffi::Buffer<ffi::F64>>() // logdet scalar
+);
+
 template <typename T> nb::capsule EncapsulateFfiHandler(T *fn) {
   static_assert(std::is_invocable_r_v<XLA_FFI_Error *, T, XLA_FFI_CallFrame *>,
                 "Encapsulated function must be an XLA FFI handler");
@@ -42,6 +57,7 @@ NB_MODULE(backend, m) {
     nb::dict d;
     d["cudss_solve"] = EncapsulateFfiHandler(CudssSolve);
     d["cudss_logdet"] = EncapsulateFfiHandler(CudssLogdet);
+    d["cudss_solve_logdet"] = EncapsulateFfiHandler(CudssSolveLogdet);
     return d;
   });
   m.def(

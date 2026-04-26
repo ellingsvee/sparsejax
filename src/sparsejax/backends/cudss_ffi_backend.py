@@ -12,10 +12,11 @@ from sparsejax._csr import coo_to_csr
 _REGISTERED = False
 _HAVE_HANDLER = False
 _HAVE_LOGDET = False
+_HAVE_SOLVE_LOGDET = False
 
 
 def _try_register() -> bool:
-    global _REGISTERED, _HAVE_HANDLER, _HAVE_LOGDET
+    global _REGISTERED, _HAVE_HANDLER, _HAVE_LOGDET, _HAVE_SOLVE_LOGDET
     if _REGISTERED:
         return _HAVE_HANDLER
     _REGISTERED = True
@@ -42,6 +43,15 @@ def _try_register() -> bool:
             _HAVE_LOGDET = True
         except Exception:
             _HAVE_LOGDET = False
+    combo_cap = regs.get("cudss_solve_logdet")
+    if combo_cap is not None:
+        try:
+            jax.ffi.register_ffi_target(
+                "cudss_solve_logdet", combo_cap, platform="CUDA"
+            )
+            _HAVE_SOLVE_LOGDET = True
+        except Exception:
+            _HAVE_SOLVE_LOGDET = False
     return True
 
 
@@ -126,6 +136,46 @@ def cholesky_solve(
     b: jax.Array,
 ) -> jax.Array:
     return _call_cudss(data, indices, shape, b, "spd")
+
+
+def cholesky_solve_and_logdet(
+    data: jax.Array,
+    indices: np.ndarray,
+    shape: Tuple[int, int],
+    b: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    if not _try_register() or not _HAVE_SOLVE_LOGDET:
+        x = cholesky_solve(data, indices, shape, b)
+        ld = logdet(data, indices, shape, matrix_type="spd")
+        return x, ld
+
+    m, n = shape
+    if m != n:
+        raise ValueError(f"cuDSS requires square matrix, got {shape}")
+    csr = coo_to_csr(indices, shape)
+    data_csr = data[csr.order].astype(jnp.float64)
+    row_ptr = jnp.asarray(csr.indptr, dtype=jnp.int32)
+    col_idx = jnp.asarray(csr.col_idx, dtype=jnp.int32)
+    b64 = b.astype(jnp.float64)
+
+    ffi_fn = jax.ffi.ffi_call(
+        "cudss_solve_logdet",
+        (
+            jax.ShapeDtypeStruct(b.shape, jnp.float64),
+            jax.ShapeDtypeStruct((), jnp.float64),
+        ),
+        vmap_method="sequential",
+    )
+    mt = _MTYPE["spd"]
+    x, ld = ffi_fn(
+        row_ptr,
+        col_idx,
+        data_csr,
+        b64,
+        matrix_type=np.int64(mt),
+        factor_token=np.int64(csr.factor_token),
+    )
+    return x.astype(jnp.result_type(data.dtype, b.dtype)), ld.astype(data.dtype)
 
 
 def build_factor(

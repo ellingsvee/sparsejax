@@ -53,6 +53,10 @@ def _dispatch_chol_solve_and_logdet(
         from sparsejax.backends import scipy_backend
 
         return scipy_backend.solve_and_logdet(data, indices, shape, b)
+    if backend_name == "cudss_ffi":
+        from sparsejax.backends import cudss_ffi_backend
+
+        return cudss_ffi_backend.cholesky_solve_and_logdet(data, indices, shape, b)
 
     x = _dispatch_chol_solve(backend_name, data, indices, shape, b)
     from .logdet import _dispatch_logdet
