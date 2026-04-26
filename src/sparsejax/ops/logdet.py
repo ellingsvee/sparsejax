@@ -63,6 +63,9 @@ def _logdet_fwd(data, indices, shape, backend_name):
 def _logdet_bwd(indices, shape, backend_name, residuals, g):
     (data,) = residuals
 
+    # TODO: There is still some redundant work here when A has multiple entries in the same column.
+    # The ideal solution is still to use the selected inversion algorithm.
+    # Current solution:
     # We need A^{-1} only at A's nonzero pattern. Solve A X = E where the
     # columns of E are the standard basis vectors for the unique columns
     # appearing in A.indices[1], then gather A^{-1}[row[k], col[k]] from
