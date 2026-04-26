@@ -29,7 +29,7 @@ def _spdmm_via_ffi(
 
     # jaxlib's CSR sparse FFI descriptors used here are int32-indexed.
     csr = coo_to_csr(indices, shape, index_dtype=np.int32)
-    data_csr = data[csr.order]
+    data_csr = data if csr.order_is_identity else data[csr.order]
     indptr = jnp.asarray(csr.indptr)
     col_idx = jnp.asarray(csr.col_idx)
     if X.ndim == 1:

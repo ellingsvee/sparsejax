@@ -7,6 +7,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from sparsejax._csr import coo_to_csr
 from sparsejax.sparse import SparseMatrix
 from sparsejax.utils import _resolve_backend
 
@@ -108,6 +109,34 @@ def _dispatch_spspmm(
                 b_shape,
             )
     raise ValueError(f"unknown spspmm backend: {backend_name!r}")
+
+
+def _spspmm_scipy_csr(
+    a_data,
+    a_indptr: np.ndarray,
+    a_indices: np.ndarray,
+    a_shape: tuple,
+    b_data,
+    b_indptr: np.ndarray,
+    b_indices: np.ndarray,
+    b_shape: tuple,
+):
+    import scipy.sparse as sp
+
+    A = sp.csr_matrix((np.asarray(a_data), a_indices, a_indptr), shape=a_shape)
+    B = sp.csr_matrix((np.asarray(b_data), b_indices, b_indptr), shape=b_shape)
+    if not A.has_canonical_format:
+        A.sum_duplicates()
+    if not B.has_canonical_format:
+        B.sum_duplicates()
+    C = (A @ B).tocoo()
+    index_dtype = _output_index_dtype(a_indices, b_indices, shape=(a_shape[0], b_shape[1]))
+    return (
+        np.asarray(C.data),
+        np.asarray(C.row, dtype=index_dtype),
+        np.asarray(C.col, dtype=index_dtype),
+        (a_shape[0], b_shape[1]),
+    )
 
 
 def _resolve_spspmm_backend(A: SparseMatrix, backend: str | None) -> str:
@@ -239,19 +268,40 @@ def _spspmm_impl(
     b_col = np.asarray(b_indices[1])
     c_row = np.asarray(c_indices[0])
     c_col = np.asarray(c_indices[1])
+    use_scipy_csr = backend_name in ("scipy", "cholmod")
+    if use_scipy_csr:
+        a_csr = coo_to_csr(a_indices, a_shape)
+        b_csr = coo_to_csr(b_indices, b_shape)
+        a_callback_data = a_data if a_csr.order_is_identity else a_data[a_csr.order]
+        b_callback_data = b_data if b_csr.order_is_identity else b_data[b_csr.order]
+    else:
+        a_callback_data = a_data
+        b_callback_data = b_data
 
     def _host(a_h, b_h):
-        cd, cr, cc, _ = _dispatch_spspmm(
-            backend_name,
-            np.asarray(a_h),
-            a_row,
-            a_col,
-            a_shape,
-            np.asarray(b_h),
-            b_row,
-            b_col,
-            b_shape,
-        )
+        if use_scipy_csr:
+            cd, cr, cc, _ = _spspmm_scipy_csr(
+                a_h,
+                a_csr.indptr,
+                a_csr.col_idx,
+                a_shape,
+                b_h,
+                b_csr.indptr,
+                b_csr.col_idx,
+                b_shape,
+            )
+        else:
+            cd, cr, cc, _ = _dispatch_spspmm(
+                backend_name,
+                np.asarray(a_h),
+                a_row,
+                a_col,
+                a_shape,
+                np.asarray(b_h),
+                b_row,
+                b_col,
+                b_shape,
+            )
         return _pick_at_pattern(
             np.asarray(cr),
             np.asarray(cc),
@@ -265,8 +315,8 @@ def _spspmm_impl(
     return jax.pure_callback(
         _host,
         jax.ShapeDtypeStruct((nnz_c,), out_dtype),
-        a_data,
-        b_data,
+        a_callback_data,
+        b_callback_data,
     )
 
 

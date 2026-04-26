@@ -31,6 +31,27 @@ def test_spadd_disjoint():
     np.testing.assert_allclose(np.asarray(C.to_dense()), expected)
 
 
+def test_spadd_reuses_identical_structure():
+    A = SparseMatrix.from_coo([1.0, 2.0], [0, 1], [1, 0], (2, 2))
+    B = A.structure.with_data(jnp.array([3.0, 4.0]))
+
+    C = spadd(A, B)
+
+    assert C.structure is A.structure
+    np.testing.assert_allclose(np.asarray(C.data), [4.0, 6.0])
+
+
+def test_spadd_caches_union_structure():
+    A = SparseMatrix.from_coo([1.0], [0], [0], (2, 2))
+    B = SparseMatrix.from_coo([2.0], [1], [1], (2, 2))
+
+    C1 = spadd(A, B)
+    C2 = spadd(A, B)
+
+    assert C2.structure is C1.structure
+    np.testing.assert_allclose(np.asarray(C2.to_dense()), [[1.0, 0.0], [0.0, 2.0]])
+
+
 def test_spadd_grad():
     rng = np.random.default_rng(3)
     n = 4

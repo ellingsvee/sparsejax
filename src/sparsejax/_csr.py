@@ -19,6 +19,7 @@ class CsrStructure(NamedTuple):
     indptr: np.ndarray  # int32/int64, shape (n_rows + 1,)
     col_idx: np.ndarray  # int32/int64, shape (nnz,)
     order: np.ndarray  # int64, data-permutation (data_csr = data[order])
+    order_is_identity: bool
     shape: Tuple[int, int]
     factor_token: int  # nonzero, stable per indices array
     # Weak ref to the indices ndarray this structure was built for, used to
@@ -142,6 +143,9 @@ def coo_to_csr(
     n_rows = shape[0]
     # Sort primarily by row, secondarily by col — gives canonical CSR layout.
     order = np.lexsort((col, row))
+    order_is_identity = bool(
+        order.size == 0 or np.array_equal(order, np.arange(order.size))
+    )
     row_sorted = row[order]
     col_sorted = col[order]
     counts = np.bincount(row_sorted, minlength=n_rows)
@@ -157,6 +161,7 @@ def coo_to_csr(
         indptr=indptr,
         col_idx=col_sorted.astype(dt, copy=False),
         order=order,
+        order_is_identity=order_is_identity,
         shape=shape,
         factor_token=token,
         indices_ref=indices_ref,

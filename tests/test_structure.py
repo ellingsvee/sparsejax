@@ -40,6 +40,22 @@ def test_csr_defaults_to_int64_for_int64_indices():
     assert csr.col_idx[0] == 2**31
 
 
+def test_csr_marks_identity_order():
+    indices = np.array([[0, 0, 1], [0, 2, 1]], dtype=np.int32)
+
+    csr = coo_to_csr(indices, (2, 3))
+
+    assert csr.order_is_identity
+
+
+def test_csr_marks_non_identity_order():
+    indices = np.array([[1, 0, 0], [1, 2, 0]], dtype=np.int32)
+
+    csr = coo_to_csr(indices, (2, 3))
+
+    assert not csr.order_is_identity
+
+
 def test_csr_int32_path_rejects_large_indices():
     indices = np.array([[0], [2**31]], dtype=np.int64)
 
