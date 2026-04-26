@@ -198,9 +198,42 @@ class SparseMatrix:
         shape: Tuple[int, int],
         *,
         index_dtype=None,
+        sum_duplicates: bool = False,
     ) -> "SparseMatrix":
-        structure = SparseStructure.from_coo(row, col, shape, index_dtype=index_dtype)
-        return cls(data=jnp.asarray(data), structure=structure)
+        """Build a SparseMatrix from COO triplets.
+
+        With ``sum_duplicates=True``, repeated ``(row, col)`` entries are deduplicated statically (numpy) and their values summed inside XLA.
+        """
+        if not sum_duplicates:
+            structure = SparseStructure.from_coo(
+                row, col, shape, index_dtype=index_dtype
+            )
+            return cls(data=jnp.asarray(data), structure=structure)
+
+        rows_np = np.asarray(row, dtype=np.int64)
+        cols_np = np.asarray(col, dtype=np.int64)
+        if rows_np.shape != cols_np.shape:
+            raise ValueError(
+                "row and col shapes must match, "
+                f"got {rows_np.shape} and {cols_np.shape}"
+            )
+        data_arr = jnp.asarray(data)
+        if data_arr.shape != rows_np.shape:
+            raise ValueError(
+                "data and row shapes must match, "
+                f"got {data_arr.shape} and {rows_np.shape}"
+            )
+        n_cols = int(shape[1])
+        lin = rows_np * n_cols + cols_np
+        uniq, inv = np.unique(lin, return_inverse=True)
+        nnz = int(uniq.size)
+        out_rows = (uniq // n_cols).astype(np.int64)
+        out_cols = (uniq % n_cols).astype(np.int64)
+        structure = SparseStructure.from_coo(
+            out_rows, out_cols, shape, index_dtype=index_dtype
+        )
+        out = jnp.zeros(nnz, dtype=data_arr.dtype).at[jnp.asarray(inv)].add(data_arr)
+        return cls(data=out, structure=structure)
 
     @classmethod
     def from_dense(cls, dense) -> "SparseMatrix":
