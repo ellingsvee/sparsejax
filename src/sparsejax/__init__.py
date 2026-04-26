@@ -26,6 +26,10 @@ from .ops import (
     cholesky_factor,
     CholeskyFactor,
     logdet,
+    eye,
+    diag,
+    spdiagmm,
+    symmetrize,
 )
 from . import backends
 
@@ -42,6 +46,10 @@ __all__ = [
     "cholesky_factor",
     "CholeskyFactor",
     "logdet",
+    "eye",
+    "diag",
+    "spdiagmm",
+    "symmetrize",
     "backends",
 ]
 

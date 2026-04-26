@@ -8,6 +8,9 @@ from .cholesky import (
     CholeskyFactor,
 )
 from .logdet import logdet
+from .builders import eye, diag
+from .diagmm import spdiagmm
+from .symmetrize import symmetrize
 
 __all__ = [
     "spmv",
@@ -20,4 +23,8 @@ __all__ = [
     "cholesky_factor",
     "CholeskyFactor",
     "logdet",
+    "eye",
+    "diag",
+    "spdiagmm",
+    "symmetrize",
 ]
