@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-
 from functools import partial
+import weakref
 
 import jax
 import jax.numpy as jnp
@@ -9,6 +9,22 @@ import numpy as np
 
 from sparsejax.sparse import SparseMatrix
 from sparsejax.utils import _resolve_backend
+
+
+class _PatternCacheEntry:
+    __slots__ = ("indices", "a_ref", "b_ref")
+
+    def __init__(self, indices, a_ref, b_ref):
+        self.indices = indices
+        self.a_ref = a_ref
+        self.b_ref = b_ref
+
+
+_PATTERN_CACHE: dict[tuple[int, tuple, int, tuple], _PatternCacheEntry] = {}
+
+
+def _drop_pattern_cache(key) -> None:
+    _PATTERN_CACHE.pop(key, None)
 
 
 def _dispatch_spspmm(
@@ -100,6 +116,37 @@ def _compute_pattern(
         ],
         axis=0,
     )
+
+
+def _cached_pattern(
+    a_indices: np.ndarray,
+    a_shape: tuple,
+    b_indices: np.ndarray,
+    b_shape: tuple,
+) -> np.ndarray:
+    key = (id(a_indices), tuple(a_shape), id(b_indices), tuple(b_shape))
+    entry = _PATTERN_CACHE.get(key)
+    if entry is not None:
+        a_cached = entry.a_ref() if entry.a_ref is not None else a_indices
+        b_cached = entry.b_ref() if entry.b_ref is not None else b_indices
+        if a_cached is a_indices and b_cached is b_indices:
+            return entry.indices
+        _PATTERN_CACHE.pop(key, None)
+
+    c_indices = _compute_pattern(a_indices, a_shape, b_indices, b_shape)
+    try:
+        a_ref = weakref.ref(a_indices)
+        weakref.finalize(a_indices, _drop_pattern_cache, key)
+    except TypeError:
+        a_ref = None
+    try:
+        b_ref = weakref.ref(b_indices)
+        if b_indices is not a_indices:
+            weakref.finalize(b_indices, _drop_pattern_cache, key)
+    except TypeError:
+        b_ref = None
+    _PATTERN_CACHE[key] = _PatternCacheEntry(c_indices, a_ref, b_ref)
+    return c_indices
 
 
 def _pick_at_pattern(
@@ -303,7 +350,7 @@ def spspmm(
         raise ValueError(f"shape mismatch: A {A.shape} @ B {B.shape}")
     backend_name = _resolve_backend(A, backend)
     c_shape = (A.shape[0], B.shape[1])
-    c_indices = _compute_pattern(A.indices, A.shape, B.indices, B.shape)
+    c_indices = _cached_pattern(A.indices, A.shape, B.indices, B.shape)
     c_data = _spspmm_impl(
         A.data,
         B.data,
