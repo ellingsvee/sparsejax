@@ -8,6 +8,11 @@ build/
 dist/
 wheels/
 *.egg-info
+target/
+src/sparsejax/rust_backend*.so
 
 # Virtual environments
 .venv
+
+# Rust-lockfile
+Cargo.lock

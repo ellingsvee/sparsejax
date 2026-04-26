@@ -151,6 +151,52 @@ def logdet(
     return jax.pure_callback(_host, jax.ShapeDtypeStruct((), out_dtype), data)
 
 
+def selected_inverse_entries_takahashi(
+    data: jax.Array,
+    indices: np.ndarray,
+    shape: tuple[int, int],
+) -> jax.Array:
+    """Selected inverse values aligned with ``indices`` via CHOLMOD + Rust.
+
+    Returns ``A^{-1}[row[k], col[k]]`` for each input COO entry. This is used
+    as an opt-in logdet VJP path to avoid solving against all unique sparse
+    columns.
+    """
+    out_dtype = data.dtype
+    out_shape = (indices.shape[1],)
+    row = np.asarray(indices[0], dtype=np.int64)
+    col = np.asarray(indices[1], dtype=np.int64)
+
+    def _host(data_h):
+        try:
+            from sparsejax.rust_backend import takahashi_masked
+        except ImportError as e:  # pragma: no cover - optional extension
+            raise RuntimeError(
+                "backend='cholmod_takahashi' requires the optional Rust extension. "
+                "Build it with `uv run --extra rust maturin develop --release`."
+            ) from e
+
+        factor = _get_or_build_factor(np.asarray(data_h), indices, shape)
+        L = factor.L
+        perm = np.asarray(factor.get_perm(), dtype=np.int32)
+        gathered = takahashi_masked(
+            np.asarray(L.indptr, dtype=np.int32),
+            np.asarray(L.indices, dtype=np.int32),
+            np.asarray(L.data, dtype=np.float64),
+            perm,
+            row.astype(np.int32, copy=False),
+            col.astype(np.int32, copy=False),
+            int(shape[0]),
+        )
+        return np.asarray(gathered).astype(out_dtype, copy=False)
+
+    return jax.pure_callback(
+        _host,
+        jax.ShapeDtypeStruct(out_shape, out_dtype),
+        data,
+    )
+
+
 def build_factor(data: np.ndarray, indices: np.ndarray, shape):
     from sparsejax.ops.cholesky import CholeskyFactor
 

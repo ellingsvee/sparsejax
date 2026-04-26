@@ -19,6 +19,8 @@ cuda = [
 ]
 dev = ["pytest>=8", "rich"]
 bench = ["rich"]
+rust = ["maturin>=1.13,<2.0"]
+
 
 [build-system]
 requires = [
@@ -37,3 +39,10 @@ wheel.packages = ["src/sparsejax"]
 cmake.args = []
 
 [tool.scikit-build.cmake.define]
+
+
+[tool.maturin]
+module-name = "sparsejax.rust_backend"
+python-packages = ["sparsejax"]
+python-source = "src"
+manifest-path = "Cargo.toml"

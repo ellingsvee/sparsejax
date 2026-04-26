@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from importlib import import_module
 from typing import Dict, Literal
 
-BackendName = Literal["scipy", "cholmod", "cudss", "cudss_ffi"]
+BackendName = Literal["scipy", "cholmod", "cholmod_takahashi", "cudss", "cudss_ffi"]
 
 _AVAILABILITY: Dict[str, bool] = {}
 
@@ -17,6 +18,12 @@ def _probe(name: str) -> bool:
             ok = True
         elif name == "cholmod":
             from sksparse import cholmod  # noqa: F401
+
+            ok = True
+        elif name == "cholmod_takahashi":
+            from sksparse import cholmod  # noqa: F401
+
+            import_module("sparsejax.rust_backend")
 
             ok = True
         elif name == "cudss":
@@ -41,7 +48,11 @@ def is_available(name: BackendName) -> bool:
 
 
 def available_backends() -> list[str]:
-    return [n for n in ("scipy", "cholmod", "cudss_ffi", "cudss") if _probe(n)]
+    return [
+        n
+        for n in ("scipy", "cholmod", "cholmod_takahashi", "cudss_ffi", "cudss")
+        if _probe(n)
+    ]
 
 
 def select_backend(device_kind: str, *, spd: bool = False) -> str:

@@ -310,6 +310,7 @@ def summarize(times: list[float]) -> dict:
 
 
 CPU_BACKENDS_SOLVE = ["scipy", "cholmod"]
+CPU_BACKENDS_LOGDET_GRAD = ["cholmod", "cholmod_takahashi"]
 GPU_BACKENDS_SOLVE = ["cudss_ffi", "cudss"]
 
 
@@ -748,6 +749,98 @@ def bench_logdet(N: int, repeats: int, warmup: int, cpu, gpu) -> list[Result]:
     return results
 
 
+def bench_logdet_grad(N: int, repeats: int, warmup: int, cpu, gpu) -> list[Result]:
+    A_coo = laplacian_2d(N)
+    n = N * N
+    results: list[Result] = []
+
+    if cpu is not None:
+        A = to_sparse_matrix(A_coo, cpu)
+        for bk in CPU_BACKENDS_LOGDET_GRAD:
+            if not backends.is_available(cast(BackendName, bk)):
+                results.append(
+                    Result(
+                        op="logdet_grad",
+                        backend=bk,
+                        device="cpu",
+                        N=N,
+                        n=n,
+                        nnz=A.nnz,
+                        status="skip",
+                        note="backend unavailable",
+                    )
+                )
+                continue
+
+            def loss(data, *, bk=bk):
+                return logdet(A.structure.with_data(data), backend=bk)
+
+            grad_jit = jax.jit(jax.grad(loss))
+            times, status, note = time_fn(
+                lambda: grad_jit(A.data),
+                warmup=warmup,
+                repeats=repeats,
+            )
+            results.append(
+                Result(
+                    op="logdet_grad",
+                    backend=bk,
+                    device="cpu",
+                    N=N,
+                    n=n,
+                    nnz=A.nnz,
+                    status=status,
+                    note=note,
+                    **summarize(times),
+                )
+            )
+
+    for label, device in (("gpu", gpu),):
+        if device is None:
+            continue
+        A = to_sparse_matrix(A_coo, device)
+        for bk in GPU_BACKENDS_SOLVE:
+            if not backends.is_available(cast(BackendName, bk)):
+                results.append(
+                    Result(
+                        op="logdet_grad",
+                        backend=bk,
+                        device=label,
+                        N=N,
+                        n=n,
+                        nnz=A.nnz,
+                        status="skip",
+                        note="backend unavailable",
+                    )
+                )
+                continue
+
+            def loss(data, *, bk=bk):
+                return logdet(A.structure.with_data(data), backend=bk)
+
+            grad_jit = jax.jit(jax.grad(loss))
+            times, status, note = time_fn(
+                lambda: grad_jit(A.data),
+                warmup=warmup,
+                repeats=repeats,
+            )
+            results.append(
+                Result(
+                    op="logdet_grad",
+                    backend=bk,
+                    device=label,
+                    N=N,
+                    n=n,
+                    nnz=A.nnz,
+                    status=status,
+                    note=note,
+                    **summarize(times),
+                )
+            )
+
+    return results
+
+
 OPS = {
     "spadd": bench_spadd,
     "spmv": bench_spmv,
@@ -758,6 +851,7 @@ OPS = {
     "cholesky_solve_and_logdet": bench_cholesky_solve_and_logdet,
     "cholesky_factor": bench_cholesky_factor,
     "logdet": bench_logdet,
+    "logdet_grad": bench_logdet_grad,
 }
 
 

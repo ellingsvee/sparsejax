@@ -10,6 +10,7 @@ import pytest
 
 from sparsejax import (
     SparseMatrix,
+    backends,
     cholesky_solve,
     cholesky_solve_and_logdet,
     cholesky_factor,
@@ -165,3 +166,39 @@ class TestLogdet:
         g_sp = jax.grad(fn)(data)
         g_de = jax.grad(fn_dense)(data)
         np.testing.assert_allclose(np.asarray(g_sp), np.asarray(g_de), atol=ATOL)
+
+
+@pytest.mark.skipif(
+    not backends.is_available("cholmod_takahashi"),
+    reason="cholmod_takahashi backend unavailable",
+)
+def test_logdet_takahashi_grad_matches_cholmod_on_sparse_pattern():
+    n = 8
+    diag = 4.0 * np.ones(n)
+    off = -1.0 * np.ones(n - 1)
+    A_dense = np.diag(diag) + np.diag(off, 1) + np.diag(off, -1)
+    rows, cols = np.nonzero(A_dense)
+    indices = np.stack([rows, cols]).astype(np.int32)
+    data = jnp.asarray(A_dense[rows, cols])
+
+    @jax.jit
+    def grad_takahashi(d):
+        A = SparseMatrix(data=d, indices=indices, shape=A_dense.shape)
+        structure = A.structure
+        return jax.grad(
+            lambda vals: logdet(structure.with_data(vals), backend="cholmod_takahashi")
+        )(d)
+
+    @jax.jit
+    def grad_cholmod(d):
+        A = SparseMatrix(data=d, indices=indices, shape=A_dense.shape)
+        structure = A.structure
+        return jax.grad(
+            lambda vals: logdet(structure.with_data(vals), backend="cholmod")
+        )(d)
+
+    g_takahashi = grad_takahashi(data)
+    g_cholmod = grad_cholmod(data)
+    np.testing.assert_allclose(
+        np.asarray(g_takahashi), np.asarray(g_cholmod), atol=ATOL
+    )

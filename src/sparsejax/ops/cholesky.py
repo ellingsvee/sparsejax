@@ -17,7 +17,7 @@ def _dispatch_chol_solve(
     shape: tuple,
     b: jax.Array,
 ) -> jax.Array:
-    if backend_name == "cholmod":
+    if backend_name in ("cholmod", "cholmod_takahashi"):
         from sparsejax.backends import cholmod_backend
 
         return cholmod_backend.cholesky_solve(data, indices, shape, b)
@@ -45,7 +45,7 @@ def _dispatch_chol_solve_and_logdet(
     shape: tuple,
     b: jax.Array,
 ) -> tuple[jax.Array, jax.Array]:
-    if backend_name == "cholmod":
+    if backend_name in ("cholmod", "cholmod_takahashi"):
         from sparsejax.backends import cholmod_backend
 
         return cholmod_backend.cholesky_solve_and_logdet(data, indices, shape, b)
@@ -120,31 +120,40 @@ def _cholesky_solve_and_logdet_bwd(indices, shape, backend_name, residuals, g):
     col_idx = indices[1]
     row_arr = np.asarray(row_idx, dtype=np.int64)
     col_arr = np.asarray(col_idx, dtype=np.int64)
-    n = shape[0]
 
-    unique_cols, inv_idx = np.unique(col_arr, return_inverse=True)
-    E = jax.nn.one_hot(unique_cols, n, dtype=data.dtype).T
+    if backend_name == "cholmod_takahashi":
+        from sparsejax.backends import cholmod_backend
 
-    if backend_name in ("cholmod", "scipy"):
-        if gx.ndim == 1:
-            gx_cols = 1
-            gx_rhs = gx[:, None]
-        else:
-            gx_cols = gx.shape[1]
-            gx_rhs = gx
-        rhs = jnp.concatenate([gx_rhs, E], axis=1)
-        sol = _dispatch_chol_solve(backend_name, data, indices, shape, rhs)
-        lam_mat = sol[:, :gx_cols]
-        inv_cols = sol[:, gx_cols:]
-        lam = lam_mat[:, 0] if gx.ndim == 1 else lam_mat
-    else:
         lam = _dispatch_chol_solve(backend_name, data, indices, shape, gx)
-        inv_cols = _dispatch_chol_solve(backend_name, data, indices, shape, E)
+        logdet_inv_data = cholmod_backend.selected_inverse_entries_takahashi(
+            data, indices, shape
+        )
+    else:
+        n = shape[0]
+        unique_cols, inv_idx = np.unique(col_arr, return_inverse=True)
+        E = jax.nn.one_hot(unique_cols, n, dtype=data.dtype).T
+
+        if backend_name in ("cholmod", "scipy"):
+            if gx.ndim == 1:
+                gx_cols = 1
+                gx_rhs = gx[:, None]
+            else:
+                gx_cols = gx.shape[1]
+                gx_rhs = gx
+            rhs = jnp.concatenate([gx_rhs, E], axis=1)
+            sol = _dispatch_chol_solve(backend_name, data, indices, shape, rhs)
+            lam_mat = sol[:, :gx_cols]
+            inv_cols = sol[:, gx_cols:]
+            lam = lam_mat[:, 0] if gx.ndim == 1 else lam_mat
+        else:
+            lam = _dispatch_chol_solve(backend_name, data, indices, shape, gx)
+            inv_cols = _dispatch_chol_solve(backend_name, data, indices, shape, E)
+        logdet_inv_data = inv_cols[jnp.asarray(row_arr), jnp.asarray(inv_idx)]
 
     solve_g_data = -lam[row_idx] * x[col_idx]
     if solve_g_data.ndim == 2:
         solve_g_data = solve_g_data.sum(axis=-1)
-    logdet_g_data = gld * inv_cols[jnp.asarray(row_arr), jnp.asarray(inv_idx)]
+    logdet_g_data = gld * logdet_inv_data
     return (solve_g_data + logdet_g_data, lam)
 
 
