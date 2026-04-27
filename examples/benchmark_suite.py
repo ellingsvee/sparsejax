@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from functools import partial
+
 import argparse
 import statistics
 import time
@@ -50,6 +52,20 @@ def laplacian_2d(N: int) -> sp.coo_matrix:
     off[np.arange(1, n) % N == 0] = 0.0
     far = -1.0 * np.ones(n - N)
     return sp.diags([far, off, main, off, far], [-N, -1, 0, 1, N], format="coo")
+
+
+def SPDE_mat(N: int) -> sp.coo_matrix:
+    """2D 5-point Laplacian on an N x N grid (SPD, size n = N*N)."""
+    Q = laplacian_2d(N)
+
+    # Random sparse observation matrix A (size m x n, m < n)
+    n = N * N
+    m = n // 2
+    density = 0.001
+    rng = np.random.default_rng(0)
+    A = sp.random(m, n, density=density, format="coo", rng=rng)
+    Q_C = A.T @ A + Q
+    return Q_C.tocoo()
 
 
 def to_sparse_matrix(A_coo: sp.coo_matrix, device) -> SparseMatrix:
@@ -314,8 +330,10 @@ CPU_BACKENDS_LOGDET_GRAD = ["cholmod", "cholmod_takahashi"]
 GPU_BACKENDS_SOLVE = ["cudss_ffi", "cudss"]
 
 
-def bench_spmv(N: int, repeats: int, warmup: int, cpu, gpu) -> list[Result]:
-    A_coo = laplacian_2d(N)
+def bench_spmv(
+    N: int, repeats: int, warmup: int, cpu, gpu, matrix_gen: Callable = laplacian_2d
+) -> list[Result]:
+    A_coo = matrix_gen(N)
     n = N * N
     rng = np.random.default_rng(0)
     x_np = rng.standard_normal(n)
@@ -345,9 +363,11 @@ def bench_spmv(N: int, repeats: int, warmup: int, cpu, gpu) -> list[Result]:
     return results
 
 
-def bench_spadd(N: int, repeats: int, warmup: int, cpu, gpu) -> list[Result]:
-    A_coo = laplacian_2d(N)
-    B_coo = laplacian_2d(N).T
+def bench_spadd(
+    N: int, repeats: int, warmup: int, cpu, gpu, matrix_gen: Callable = laplacian_2d
+) -> list[Result]:
+    A_coo = matrix_gen(N)
+    B_coo = matrix_gen(N).T
     n = N * N
     results: list[Result] = bench_reference("spadd", A_coo, N, repeats, warmup)
 
@@ -375,8 +395,10 @@ def bench_spadd(N: int, repeats: int, warmup: int, cpu, gpu) -> list[Result]:
     return results
 
 
-def bench_spdmm(N: int, repeats: int, warmup: int, cpu, gpu) -> list[Result]:
-    A_coo = laplacian_2d(N)
+def bench_spdmm(
+    N: int, repeats: int, warmup: int, cpu, gpu, matrix_gen: Callable = laplacian_2d
+) -> list[Result]:
+    A_coo = matrix_gen(N)
     n = N * N
     results: list[Result] = bench_reference("spdmm", A_coo, N, repeats, warmup)
 
@@ -406,8 +428,10 @@ def bench_spdmm(N: int, repeats: int, warmup: int, cpu, gpu) -> list[Result]:
     return results
 
 
-def bench_spspmm(N: int, repeats: int, warmup: int, cpu, gpu) -> list[Result]:
-    A_coo = laplacian_2d(N)
+def bench_spspmm(
+    N: int, repeats: int, warmup: int, cpu, gpu, matrix_gen: Callable = laplacian_2d
+) -> list[Result]:
+    A_coo = matrix_gen(N)
     n = N * N
     results: list[Result] = bench_reference("spspmm", A_coo, N, repeats, warmup)
 
@@ -436,8 +460,10 @@ def bench_spspmm(N: int, repeats: int, warmup: int, cpu, gpu) -> list[Result]:
     return results
 
 
-def bench_spsolve(N: int, repeats: int, warmup: int, cpu, gpu) -> list[Result]:
-    A_coo = laplacian_2d(N)
+def bench_spsolve(
+    N: int, repeats: int, warmup: int, cpu, gpu, matrix_gen: Callable = laplacian_2d
+) -> list[Result]:
+    A_coo = matrix_gen(N)
     n = N * N
     rng = np.random.default_rng(0)
     b_np = rng.standard_normal(n)
@@ -490,8 +516,10 @@ def bench_spsolve(N: int, repeats: int, warmup: int, cpu, gpu) -> list[Result]:
     return results
 
 
-def bench_cholesky_solve(N: int, repeats: int, warmup: int, cpu, gpu) -> list[Result]:
-    A_coo = laplacian_2d(N)
+def bench_cholesky_solve(
+    N: int, repeats: int, warmup: int, cpu, gpu, matrix_gen: Callable = laplacian_2d
+) -> list[Result]:
+    A_coo = matrix_gen(N)
     n = N * N
     rng = np.random.default_rng(0)
     b_np = rng.standard_normal(n)
@@ -544,9 +572,9 @@ def bench_cholesky_solve(N: int, repeats: int, warmup: int, cpu, gpu) -> list[Re
 
 
 def bench_cholesky_solve_and_logdet(
-    N: int, repeats: int, warmup: int, cpu, gpu
+    N: int, repeats: int, warmup: int, cpu, gpu, matrix_gen: Callable = laplacian_2d
 ) -> list[Result]:
-    A_coo = laplacian_2d(N)
+    A_coo = matrix_gen(N)
     A_csc = A_coo.tocsc()
     n = N * N
     rng = np.random.default_rng(0)
@@ -618,9 +646,11 @@ def bench_cholesky_solve_and_logdet(
     return results
 
 
-def bench_cholesky_factor(N: int, repeats: int, warmup: int, cpu, gpu) -> list[Result]:
+def bench_cholesky_factor(
+    N: int, repeats: int, warmup: int, cpu, gpu, matrix_gen: Callable = laplacian_2d
+) -> list[Result]:
     """Time the 'factor once, solve many' pattern — factor cost + per-RHS solve."""
-    A_coo = laplacian_2d(N)
+    A_coo = matrix_gen(N)
     n = N * N
     rng = np.random.default_rng(0)
     b_np = rng.standard_normal(n)
@@ -699,8 +729,10 @@ def bench_cholesky_factor(N: int, repeats: int, warmup: int, cpu, gpu) -> list[R
     return results
 
 
-def bench_logdet(N: int, repeats: int, warmup: int, cpu, gpu) -> list[Result]:
-    A_coo = laplacian_2d(N)
+def bench_logdet(
+    N: int, repeats: int, warmup: int, cpu, gpu, matrix_gen: Callable = laplacian_2d
+) -> list[Result]:
+    A_coo = matrix_gen(N)
     n = N * N
     results: list[Result] = bench_reference("logdet", A_coo, N, repeats, warmup)
 
@@ -749,8 +781,10 @@ def bench_logdet(N: int, repeats: int, warmup: int, cpu, gpu) -> list[Result]:
     return results
 
 
-def bench_logdet_grad(N: int, repeats: int, warmup: int, cpu, gpu) -> list[Result]:
-    A_coo = laplacian_2d(N)
+def bench_logdet_grad(
+    N: int, repeats: int, warmup: int, cpu, gpu, matrix_gen: Callable = laplacian_2d
+) -> list[Result]:
+    A_coo = matrix_gen(N)
     n = N * N
     results: list[Result] = []
 
@@ -842,17 +876,42 @@ def bench_logdet_grad(N: int, repeats: int, warmup: int, cpu, gpu) -> list[Resul
 
 
 OPS = {
-    "spadd": bench_spadd,
-    "spmv": bench_spmv,
-    "spdmm": bench_spdmm,
-    "spspmm": bench_spspmm,
-    "spsolve": bench_spsolve,
-    "cholesky_solve": bench_cholesky_solve,
-    "cholesky_solve_and_logdet": bench_cholesky_solve_and_logdet,
-    "cholesky_factor": bench_cholesky_factor,
-    "logdet": bench_logdet,
-    "logdet_grad": bench_logdet_grad,
+    # "spadd": bench_spadd,
+    "spadd": partial(bench_spadd, matrix_gen=SPDE_mat),
+    # "spmv": bench_spmv,
+    "spmv": partial(bench_spmv, matrix_gen=SPDE_mat),
+    # "spdmm": bench_spdmm,
+    "spdmm": partial(bench_spdmm, matrix_gen=SPDE_mat),
+    # "spspmm": bench_spspmm,
+    "spspmm": partial(bench_spspmm, matrix_gen=SPDE_mat),
+    # "spsolve": bench_spsolve,
+    "spsolve": partial(bench_spsolve, matrix_gen=SPDE_mat),
+    # "cholesky_solve": bench_cholesky_solve,
+    "cholesky_solve": partial(bench_cholesky_solve, matrix_gen=SPDE_mat),
+    # "cholesky_solve_and_logdet": bench_cholesky_solve_and_logdet,
+    "cholesky_solve_and_logdet": partial(
+        bench_cholesky_solve_and_logdet, matrix_gen=SPDE_mat
+    ),
+    # "cholesky_factor": bench_cholesky_factor,
+    "cholesky_factor": partial(bench_cholesky_factor, matrix_gen=SPDE_mat),
+    # "logdet": bench_logdet,
+    "logdet": partial(bench_logdet, matrix_gen=SPDE_mat),
+    # "logdet_grad": bench_logdet_grad,
+    "logdet_grad": partial(bench_logdet_grad, matrix_gen=SPDE_mat),
 }
+# OPS = {
+#     # "spadd": bench_spadd,
+#     "spadd": partial(bench_spadd, matrix_gen=SPDE_mat),
+#     "spmv": bench_spmv,
+#     "spdmm": bench_spdmm,
+#     "spspmm": bench_spspmm,
+#     "spsolve": bench_spsolve,
+#     "cholesky_solve": bench_cholesky_solve,
+#     "cholesky_solve_and_logdet": bench_cholesky_solve_and_logdet,
+#     "cholesky_factor": bench_cholesky_factor,
+#     "logdet": bench_logdet,
+#     "logdet_grad": bench_logdet_grad,
+# }
 
 
 def render_table(console: Console, op: str, results: list[Result]) -> None:
