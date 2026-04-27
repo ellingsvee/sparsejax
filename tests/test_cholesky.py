@@ -27,6 +27,11 @@ from setup import (
 )
 
 
+def _dense_from_upper_flat(flat, shape):
+    upper = jnp.triu(flat.reshape(shape))
+    return upper + jnp.triu(upper, 1).T
+
+
 @pytest.mark.parametrize("backend", AVAILABLE_SPD_BACKENDS)
 class TestCholeskySolve:
     def test_forward(self, backend):
@@ -54,7 +59,9 @@ class TestCholeskySolve:
             return jnp.sum(cholesky_solve(A, b, backend=backend) ** 2)
 
         def loss_dense(flat, b):
-            return jnp.sum(jnp.linalg.solve(flat.reshape(A_dense.shape), b) ** 2)
+            return jnp.sum(
+                jnp.linalg.solve(_dense_from_upper_flat(flat, A_dense.shape), b) ** 2
+            )
 
         g_sp = jax.grad(loss_sparse, argnums=(0, 1))(data, b)
         g_de = jax.grad(loss_dense, argnums=(0, 1))(data, b)
@@ -125,7 +132,7 @@ class TestCholeskySolveAndLogdet:
             return jnp.sum(x**2) + 0.3 * ld
 
         def loss_dense(flat, b):
-            mat = flat.reshape(A_dense.shape)
+            mat = _dense_from_upper_flat(flat, A_dense.shape)
             x = jnp.linalg.solve(mat, b)
             _, ld = jnp.linalg.slogdet(mat)
             return jnp.sum(x**2) + 0.3 * ld
@@ -160,7 +167,7 @@ class TestLogdet:
 
         @jax.jit
         def fn_dense(flat):
-            _, ld = jnp.linalg.slogdet(flat.reshape(A_dense.shape))
+            _, ld = jnp.linalg.slogdet(_dense_from_upper_flat(flat, A_dense.shape))
             return ld
 
         g_sp = jax.grad(fn)(data)
@@ -201,4 +208,45 @@ def test_logdet_takahashi_grad_matches_cholmod_on_sparse_pattern():
     g_cholmod = grad_cholmod(data)
     np.testing.assert_allclose(
         np.asarray(g_takahashi), np.asarray(g_cholmod), atol=ATOL
+    )
+
+
+@pytest.mark.parametrize("backend", AVAILABLE_SPD_BACKENDS)
+def test_spd_backends_use_upper_triangle_only(backend):
+    device = _device_for(backend)
+    A_dense = _make_spd(5, seed=12)
+    upper = np.triu(A_dense)
+    rows, cols = np.nonzero(np.ones_like(A_dense))
+    data_values = upper[rows, cols]
+    # Poison ignored lower-triangle entries. If a backend accidentally treats
+    # the input as a full unsymmetric matrix, the solve will no longer match.
+    data_values[rows > cols] = 1e6
+    indices = np.stack([rows, cols]).astype(np.int32)
+    data = jax.device_put(jnp.asarray(data_values), device)
+    b_np = np.linspace(-1.0, 1.0, 5)
+    b = _put(b_np, device)
+    A = SparseMatrix(data=data, indices=indices, shape=A_dense.shape)
+
+    x = cholesky_solve(A, b, backend=backend)
+    np.testing.assert_allclose(np.asarray(x), np.linalg.solve(A_dense, b_np), atol=ATOL)
+
+
+@pytest.mark.skipif(
+    not backends.is_available("cudss_ffi"),
+    reason="cudss_ffi backend unavailable",
+)
+def test_cudss_ffi_float32_solve_preserves_dtype():
+    device = _device_for("cudss_ffi")
+    A_dense = _make_spd(6, seed=13).astype(np.float32)
+    A = _dense_to_sparse(A_dense, device)
+    A = SparseMatrix(A.data.astype(jnp.float32), indices=A.indices, shape=A.shape)
+    b = jax.device_put(jnp.linspace(-1.0, 1.0, 6, dtype=jnp.float32), device)
+
+    x = cholesky_solve(A, b, backend="cudss_ffi")
+    assert x.dtype == jnp.float32
+    np.testing.assert_allclose(
+        np.asarray(x),
+        np.linalg.solve(A_dense.astype(np.float64), np.asarray(b).astype(np.float64)),
+        rtol=5e-4,
+        atol=5e-4,
     )

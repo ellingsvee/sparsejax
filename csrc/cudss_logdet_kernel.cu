@@ -11,13 +11,14 @@ namespace {
 
 constexpr int kBlock = 256;
 
-__global__ void logabs_sum_kernel(const double *__restrict__ diag, int n,
-                                  double scale, double *out) {
+template <typename T>
+__global__ void logabs_sum_kernel(const T *__restrict__ diag, int n,
+                                  double scale, T *out) {
   __shared__ double smem[kBlock];
   const int tid = threadIdx.x;
   double acc = 0.0;
   for (int i = tid; i < n; i += blockDim.x) {
-    double v = diag[i];
+    double v = static_cast<double>(diag[i]);
     if (v != 0.0) {
       acc += log(fabs(v));
     }
@@ -30,7 +31,7 @@ __global__ void logabs_sum_kernel(const double *__restrict__ diag, int n,
     __syncthreads();
   }
   if (tid == 0)
-    *out = smem[0] * scale;
+    *out = static_cast<T>(smem[0] * scale);
 }
 
 } // namespace
@@ -38,5 +39,11 @@ __global__ void logabs_sum_kernel(const double *__restrict__ diag, int n,
 extern "C" void sparsejax_launch_logabs_sum(cudaStream_t stream,
                                             const double *d_diag, int n,
                                             double scale, double *d_out) {
+  logabs_sum_kernel<<<1, kBlock, 0, stream>>>(d_diag, n, scale, d_out);
+}
+
+extern "C" void sparsejax_launch_logabs_sum_f32(cudaStream_t stream,
+                                                const float *d_diag, int n,
+                                                double scale, float *d_out) {
   logabs_sum_kernel<<<1, kBlock, 0, stream>>>(d_diag, n, scale, d_out);
 }

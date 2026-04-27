@@ -19,6 +19,12 @@ struct CudssEntry {
   int64_t n = 0;
   int64_t nnz = 0;
   int matrix_type = -1; // last-used cuDSS matrix type encoding
+  int reordering_alg = -1;
+  int factorization_alg = -1;
+  int solve_alg = -1;
+  int use_matching = -1;
+  int host_nthreads = -1;
+  int use_superpanels = -1;
   bool analyzed = false;
 
   ~CudssEntry() {

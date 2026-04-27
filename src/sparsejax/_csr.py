@@ -114,7 +114,10 @@ def coo_to_csr(
     shape: Tuple[int, int],
     *,
     index_dtype=None,
+    upper: bool = False,
 ) -> CsrStructure:
+    if upper and shape[0] != shape[1]:
+        raise ValueError(f"upper CSR view requires a square shape, got {shape}")
     dt = (
         _pick_index_dtype(indices, shape, indices.shape[1])
         if index_dtype is None
@@ -122,7 +125,7 @@ def coo_to_csr(
     )
     _check_index_capacity(indices, shape, indices.shape[1], dt)
 
-    key = (id(indices), dt.str)
+    key = (id(indices), dt.str, "upper" if upper else "full")
     entry = _CACHE.get(key)
     if entry is not None and entry.shape == shape:
         # Reject stale entries left behind by id reuse: if the cached
@@ -140,11 +143,23 @@ def coo_to_csr(
         _CACHE.pop(key, None)
     row = np.asarray(indices[0], dtype=np.int64)
     col = np.asarray(indices[1], dtype=np.int64)
+    if upper:
+        active = row <= col
+        row = row[active]
+        col = col[active]
+        original_pos = np.nonzero(active)[0]
+    else:
+        original_pos = None
     n_rows = shape[0]
     # Sort primarily by row, secondarily by col — gives canonical CSR layout.
     order = np.lexsort((col, row))
+    final_order = order if original_pos is None else original_pos[order]
     order_is_identity = bool(
-        order.size == 0 or np.array_equal(order, np.arange(order.size))
+        final_order.size == indices.shape[1]
+        and (
+            final_order.size == 0
+            or np.array_equal(final_order, np.arange(final_order.size))
+        )
     )
     row_sorted = row[order]
     col_sorted = col[order]
@@ -160,7 +175,7 @@ def coo_to_csr(
     csr = CsrStructure(
         indptr=indptr,
         col_idx=col_sorted.astype(dt, copy=False),
-        order=order,
+        order=final_order,
         order_is_identity=order_is_identity,
         shape=shape,
         factor_token=token,

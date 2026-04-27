@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Tuple
+import os
 
 import jax
 import jax.numpy as jnp
@@ -33,6 +34,9 @@ def _try_register() -> bool:
         return False
     try:
         jax.ffi.register_ffi_target("cudss_solve", cap, platform="CUDA")
+        cap_f32 = regs.get("cudss_solve_f32")
+        if cap_f32 is not None:
+            jax.ffi.register_ffi_target("cudss_solve_f32", cap_f32, platform="CUDA")
     except Exception:
         return False
     _HAVE_HANDLER = True
@@ -40,6 +44,11 @@ def _try_register() -> bool:
     if ld_cap is not None:
         try:
             jax.ffi.register_ffi_target("cudss_logdet", ld_cap, platform="CUDA")
+            ld_cap_f32 = regs.get("cudss_logdet_f32")
+            if ld_cap_f32 is not None:
+                jax.ffi.register_ffi_target(
+                    "cudss_logdet_f32", ld_cap_f32, platform="CUDA"
+                )
             _HAVE_LOGDET = True
         except Exception:
             _HAVE_LOGDET = False
@@ -49,6 +58,11 @@ def _try_register() -> bool:
             jax.ffi.register_ffi_target(
                 "cudss_solve_logdet", combo_cap, platform="CUDA"
             )
+            combo_cap_f32 = regs.get("cudss_solve_logdet_f32")
+            if combo_cap_f32 is not None:
+                jax.ffi.register_ffi_target(
+                    "cudss_solve_logdet_f32", combo_cap_f32, platform="CUDA"
+                )
             _HAVE_SOLVE_LOGDET = True
         except Exception:
             _HAVE_SOLVE_LOGDET = False
@@ -80,6 +94,40 @@ def _dense_ffi_layout(ndim: int) -> tuple[int, int] | None:
     return _COL_MAJOR_2D if ndim == 2 else None
 
 
+def _env_int(name: str, default: int = -1) -> np.int64:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return np.int64(default)
+    return np.int64(int(raw))
+
+
+def _cudss_config_attrs() -> dict[str, np.int64]:
+    """Static cuDSS config knobs read from the environment.
+
+    Supported values are cuDSS enum integer values. For example,
+    ``SPARSEJAX_CUDSS_REORDERING_ALG=1`` selects ``CUDSS_ALG_1``.
+    ``-1`` leaves the cuDSS default unchanged.
+    """
+
+    return {
+        "reordering_alg": _env_int("SPARSEJAX_CUDSS_REORDERING_ALG"),
+        "factorization_alg": _env_int("SPARSEJAX_CUDSS_FACTORIZATION_ALG"),
+        "solve_alg": _env_int("SPARSEJAX_CUDSS_SOLVE_ALG"),
+        "use_matching": _env_int("SPARSEJAX_CUDSS_USE_MATCHING"),
+        "host_nthreads": _env_int("SPARSEJAX_CUDSS_HOST_NTHREADS"),
+        "use_superpanels": _env_int("SPARSEJAX_CUDSS_USE_SUPERPANELS"),
+    }
+
+
+def _cudss_target(base: str, dtype) -> str:
+    dt = jnp.dtype(dtype)
+    if dt == jnp.float32:
+        return f"{base}_f32"
+    if dt == jnp.float64:
+        return base
+    raise TypeError(f"cudss_ffi supports float32/float64, got {dt}")
+
+
 def _call_cudss(
     data: jax.Array,
     indices: np.ndarray,
@@ -92,36 +140,39 @@ def _call_cudss(
     m, n = shape
     if m != n:
         raise ValueError(f"cuDSS requires square matrix, got {shape}")
+    upper = matrix_type in ("spd", "symmetric")
     # Current native handlers bind ffi::Buffer<S32> and CUDA_R_32I.
-    csr = coo_to_csr(indices, shape, index_dtype=np.int32)
+    csr = coo_to_csr(indices, shape, index_dtype=np.int32, upper=upper)
     # Permute the traced data onto CSR layout in-graph.
     data_csr = data if csr.order_is_identity else data[csr.order]
     # Broadcast static int arrays onto the right device as jnp arrays.
     row_ptr = jnp.asarray(csr.indptr)
     col_idx = jnp.asarray(csr.col_idx)
 
-    # cuDSS handler is F64 only; cast b/data if needed.
-    data_csr = data_csr.astype(jnp.float64)
-    b64 = b.astype(jnp.float64)
-
-    out_dtype = jnp.float64
+    out_dtype = jnp.result_type(data.dtype, b.dtype)
+    if out_dtype not in (jnp.float32, jnp.float64):
+        out_dtype = jnp.float64
+    data_csr = data_csr.astype(out_dtype)
+    b_typed = b.astype(out_dtype)
     dense_layout = _dense_ffi_layout(b.ndim)
 
     ffi_fn = jax.ffi.ffi_call(
-        "cudss_solve",
+        _cudss_target("cudss_solve", out_dtype),
         jax.ShapeDtypeStruct(b.shape, out_dtype),
         input_layouts=(None, None, None, dense_layout),
         output_layouts=dense_layout,
         vmap_method="sequential",
     )
+    config_attrs = _cudss_config_attrs()
     mt = _MTYPE[matrix_type]
     x = ffi_fn(
         row_ptr,
         col_idx,
         data_csr,
-        b64,
+        b_typed,
         matrix_type=np.int64(mt),
         factor_token=np.int64(csr.factor_token),
+        **config_attrs,
     )
     return x.astype(jnp.result_type(data.dtype, b.dtype))
 
@@ -163,32 +214,37 @@ def cholesky_solve_and_logdet(
     if m != n:
         raise ValueError(f"cuDSS requires square matrix, got {shape}")
     # Current native handlers bind ffi::Buffer<S32> and CUDA_R_32I.
-    csr = coo_to_csr(indices, shape, index_dtype=np.int32)
+    csr = coo_to_csr(indices, shape, index_dtype=np.int32, upper=True)
     data_csr = data if csr.order_is_identity else data[csr.order]
-    data_csr = data_csr.astype(jnp.float64)
+    out_dtype = jnp.result_type(data.dtype, b.dtype)
+    if out_dtype not in (jnp.float32, jnp.float64):
+        out_dtype = jnp.float64
+    data_csr = data_csr.astype(out_dtype)
     row_ptr = jnp.asarray(csr.indptr)
     col_idx = jnp.asarray(csr.col_idx)
-    b64 = b.astype(jnp.float64)
+    b_typed = b.astype(out_dtype)
     dense_layout = _dense_ffi_layout(b.ndim)
 
     ffi_fn = jax.ffi.ffi_call(
-        "cudss_solve_logdet",
+        _cudss_target("cudss_solve_logdet", out_dtype),
         (
-            jax.ShapeDtypeStruct(b.shape, jnp.float64),
-            jax.ShapeDtypeStruct((), jnp.float64),
+            jax.ShapeDtypeStruct(b.shape, out_dtype),
+            jax.ShapeDtypeStruct((), out_dtype),
         ),
         input_layouts=(None, None, None, dense_layout),
         output_layouts=(dense_layout, None),
         vmap_method="sequential",
     )
+    config_attrs = _cudss_config_attrs()
     mt = _MTYPE["spd"]
     x, ld = ffi_fn(
         row_ptr,
         col_idx,
         data_csr,
-        b64,
+        b_typed,
         matrix_type=np.int64(mt),
         factor_token=np.int64(csr.factor_token),
+        **config_attrs,
     )
     return x.astype(jnp.result_type(data.dtype, b.dtype)), ld.astype(data.dtype)
 
@@ -228,19 +284,21 @@ def logdet(
 
     from sparsejax._csr import coo_to_csr
 
+    upper = matrix_type in ("spd", "symmetric")
     # Current native handlers bind ffi::Buffer<S32> and CUDA_R_32I.
-    csr = coo_to_csr(indices, shape, index_dtype=np.int32)
+    csr = coo_to_csr(indices, shape, index_dtype=np.int32, upper=upper)
     data_csr = data if csr.order_is_identity else data[csr.order]
-    data_csr = data_csr.astype(jnp.float64)
+    out_dtype = data.dtype if data.dtype in (jnp.float32, jnp.float64) else jnp.float64
+    data_csr = data_csr.astype(out_dtype)
     row_ptr = jnp.asarray(csr.indptr)
     col_idx = jnp.asarray(csr.col_idx)
 
-    out_dtype = jnp.float64
     ffi_fn = jax.ffi.ffi_call(
-        "cudss_logdet",
+        _cudss_target("cudss_logdet", out_dtype),
         jax.ShapeDtypeStruct((), out_dtype),
         vmap_method="sequential",
     )
+    config_attrs = _cudss_config_attrs()
     mt = _MTYPE[matrix_type]
     ld = ffi_fn(
         row_ptr,
@@ -248,5 +306,6 @@ def logdet(
         data_csr,
         matrix_type=np.int64(mt),
         factor_token=np.int64(csr.factor_token),
+        **config_attrs,
     )
     return ld.astype(data.dtype)

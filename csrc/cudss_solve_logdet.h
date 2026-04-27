@@ -17,13 +17,20 @@ namespace ffi = xla::ffi;
 extern "C" void sparsejax_launch_logabs_sum(cudaStream_t stream,
                                             const double *d_diag, int n,
                                             double scale, double *d_out);
+extern "C" void sparsejax_launch_logabs_sum_f32(cudaStream_t stream,
+                                                const float *d_diag, int n,
+                                                double scale, float *d_out);
 
+template <typename T, ffi::DataType FfiT>
 inline ffi::Error
 CudssSolveLogdetImpl(cudaStream_t stream, int64_t matrix_type,
-                     int64_t factor_token, ffi::Buffer<ffi::S32> row_ptr,
-                     ffi::Buffer<ffi::S32> col_idx, ffi::Buffer<ffi::F64> data,
-                     ffi::Buffer<ffi::F64> b, ffi::ResultBuffer<ffi::F64> x,
-                     ffi::ResultBuffer<ffi::F64> logdet) {
+                     int64_t factor_token, int64_t reordering_alg,
+                     int64_t factorization_alg, int64_t solve_alg,
+                     int64_t use_matching, int64_t host_nthreads,
+                     int64_t use_superpanels, ffi::Buffer<ffi::S32> row_ptr,
+                     ffi::Buffer<ffi::S32> col_idx, ffi::Buffer<FfiT> data,
+                     ffi::Buffer<FfiT> b, ffi::ResultBuffer<FfiT> x,
+                     ffi::ResultBuffer<FfiT> logdet) {
   // Layout convention: cuDSS dense matrices are COL_MAJOR with ld=n. The
   // Python wrapper requests that layout for 2-D dense FFI buffers, so shape
   // remains the public (n, nrhs) solve shape while the physical layout matches
@@ -88,13 +95,19 @@ CudssSolveLogdetImpl(cudaStream_t stream, int64_t matrix_type,
   sparsejax::CudssEntry &entry = *entry_ptr;
 
   if (auto err = sparsejax::EnsureCudssState(entry, stream, n, nnz,
-                                             static_cast<int>(matrix_type));
+                                             static_cast<int>(matrix_type),
+                                             static_cast<int>(reordering_alg),
+                                             static_cast<int>(factorization_alg),
+                                             static_cast<int>(solve_alg),
+                                             static_cast<int>(use_matching),
+                                             static_cast<int>(host_nthreads),
+                                             static_cast<int>(use_superpanels));
       err.failure()) {
     return err;
   }
 
   cudssMatrix_t A = nullptr, B = nullptr, X = nullptr;
-  double *d_diag = nullptr;
+  T *d_diag = nullptr;
   auto cleanup = [&]() {
     if (A)
       cudssMatrixDestroy(A);
@@ -108,24 +121,25 @@ CudssSolveLogdetImpl(cudaStream_t stream, int64_t matrix_type,
 
   cudssStatus_t s = cudssMatrixCreateCsr(
       &A, n, n, nnz, row_ptr.typed_data(), nullptr, col_idx.typed_data(),
-      data.typed_data(), CUDA_R_32I, CUDA_R_64F, mtype, mview, CUDSS_BASE_ZERO);
+      data.typed_data(), CUDA_R_32I, sparsejax::CudaValueType<T>(), mtype, mview,
+      CUDSS_BASE_ZERO);
   if (s != CUDSS_STATUS_SUCCESS) {
     cleanup();
-    return ffi::Error::Internal("cudssMatrixCreateCsr failed");
+    return sparsejax::CudssError("cudssMatrixCreateCsr", s);
   }
 
   const int64_t ld = n;
-  s = cudssMatrixCreateDn(&B, n, nrhs, ld, b.typed_data(), CUDA_R_64F,
-                          CUDSS_LAYOUT_COL_MAJOR);
+  s = cudssMatrixCreateDn(&B, n, nrhs, ld, b.typed_data(),
+                          sparsejax::CudaValueType<T>(), CUDSS_LAYOUT_COL_MAJOR);
   if (s != CUDSS_STATUS_SUCCESS) {
     cleanup();
-    return ffi::Error::Internal("cudssMatrixCreateDn(B) failed");
+    return sparsejax::CudssError("cudssMatrixCreateDn(B)", s);
   }
-  s = cudssMatrixCreateDn(&X, n, nrhs, ld, x->typed_data(), CUDA_R_64F,
-                          CUDSS_LAYOUT_COL_MAJOR);
+  s = cudssMatrixCreateDn(&X, n, nrhs, ld, x->typed_data(),
+                          sparsejax::CudaValueType<T>(), CUDSS_LAYOUT_COL_MAJOR);
   if (s != CUDSS_STATUS_SUCCESS) {
     cleanup();
-    return ffi::Error::Internal("cudssMatrixCreateDn(X) failed");
+    return sparsejax::CudssError("cudssMatrixCreateDn(X)", s);
   }
 
   if (!entry.analyzed) {
@@ -133,13 +147,13 @@ CudssSolveLogdetImpl(cudaStream_t stream, int64_t matrix_type,
                      entry.data, A, X, B);
     if (s != CUDSS_STATUS_SUCCESS) {
       cleanup();
-      return ffi::Error::Internal("cudssExecute(ANALYSIS) failed");
+      return sparsejax::CudssError("cudssExecute(ANALYSIS)", s);
     }
     s = cudssExecute(entry.handle, CUDSS_PHASE_FACTORIZATION, entry.config,
                      entry.data, A, X, B);
     if (s != CUDSS_STATUS_SUCCESS) {
       cleanup();
-      return ffi::Error::Internal("cudssExecute(FACTORIZATION) failed");
+      return sparsejax::CudssError("cudssExecute(FACTORIZATION)", s);
     }
     entry.analyzed = true;
   } else {
@@ -147,7 +161,7 @@ CudssSolveLogdetImpl(cudaStream_t stream, int64_t matrix_type,
                      entry.data, A, X, B);
     if (s != CUDSS_STATUS_SUCCESS) {
       cleanup();
-      return ffi::Error::Internal("cudssExecute(REFACTORIZATION) failed");
+      return sparsejax::CudssError("cudssExecute(REFACTORIZATION)", s);
     }
   }
 
@@ -155,10 +169,10 @@ CudssSolveLogdetImpl(cudaStream_t stream, int64_t matrix_type,
                    X, B);
   if (s != CUDSS_STATUS_SUCCESS) {
     cleanup();
-    return ffi::Error::Internal("cudssExecute(SOLVE) failed");
+    return sparsejax::CudssError("cudssExecute(SOLVE)", s);
   }
 
-  const size_t diag_bytes = static_cast<size_t>(n) * sizeof(double);
+  const size_t diag_bytes = static_cast<size_t>(n) * sizeof(T);
   if (cudaError_t e = cudaMallocAsync(reinterpret_cast<void **>(&d_diag),
                                       diag_bytes, stream);
       e != cudaSuccess) {
@@ -173,8 +187,9 @@ CudssSolveLogdetImpl(cudaStream_t stream, int64_t matrix_type,
   if (s != CUDSS_STATUS_SUCCESS) {
     cleanup();
     return ffi::Error::Internal(
-        std::string("cudssDataGet(DIAG) size query failed -> status=") +
-        std::to_string(static_cast<int>(s)));
+        std::string("cudssDataGet(DIAG) size query failed: ") +
+        sparsejax::CudssStatusString(s) + " (" +
+        std::to_string(static_cast<int>(s)) + ")");
   }
   if (required > diag_bytes) {
     cudaFreeAsync(d_diag, stream);
@@ -193,8 +208,9 @@ CudssSolveLogdetImpl(cudaStream_t stream, int64_t matrix_type,
   if (s != CUDSS_STATUS_SUCCESS) {
     cleanup();
     return ffi::Error::Internal(
-        std::string("cudssDataGet(DIAG) failed -> status=") +
-        std::to_string(static_cast<int>(s)));
+        std::string("cudssDataGet(DIAG) failed: ") +
+        sparsejax::CudssStatusString(s) + " (" +
+        std::to_string(static_cast<int>(s)) + ")");
   }
   if (written < diag_bytes) {
     cleanup();
@@ -205,8 +221,13 @@ CudssSolveLogdetImpl(cudaStream_t stream, int64_t matrix_type,
         "requested matrix type.");
   }
 
-  sparsejax_launch_logabs_sum(stream, d_diag, static_cast<int>(n), scale,
-                              logdet->typed_data());
+  if constexpr (std::is_same_v<T, float>) {
+    sparsejax_launch_logabs_sum_f32(stream, d_diag, static_cast<int>(n), scale,
+                                    logdet->typed_data());
+  } else {
+    sparsejax_launch_logabs_sum(stream, d_diag, static_cast<int>(n), scale,
+                                logdet->typed_data());
+  }
   if (cudaError_t e = cudaPeekAtLastError(); e != cudaSuccess) {
     cleanup();
     return ffi::Error::Internal(std::string("logabs_sum_kernel launch: ") +

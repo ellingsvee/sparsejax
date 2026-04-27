@@ -85,12 +85,7 @@ def _cholesky_solve_bwd(indices, shape, backend_name, residuals, g):
     data, x = residuals
     # For SPD: A^{-T} = A^{-1}, so ∂b: λ = A^{-1} g = cholesky_solve(A, g)
     lam = _dispatch_chol_solve(backend_name, data, indices, shape, g)
-    # ∂A/∂data_k at (row_k, col_k): -λ[row] * x[col]
-    row_idx = indices[0]
-    col_idx = indices[1]
-    g_data = -lam[row_idx] * x[col_idx]
-    if g_data.ndim == 2:
-        g_data = g_data.sum(axis=-1)
+    g_data = _sym_upper_solve_data_grad(indices, lam, x)
     return (g_data, lam)
 
 
@@ -150,9 +145,11 @@ def _cholesky_solve_and_logdet_bwd(indices, shape, backend_name, residuals, g):
             inv_cols = _dispatch_chol_solve(backend_name, data, indices, shape, E)
         logdet_inv_data = inv_cols[jnp.asarray(row_arr), jnp.asarray(inv_idx)]
 
-    solve_g_data = -lam[row_idx] * x[col_idx]
-    if solve_g_data.ndim == 2:
-        solve_g_data = solve_g_data.sum(axis=-1)
+    solve_g_data = _sym_upper_solve_data_grad(indices, lam, x)
+    offdiag = row_idx != col_idx
+    upper = row_idx <= col_idx
+    logdet_inv_data = jnp.where(offdiag, 2.0 * logdet_inv_data, logdet_inv_data)
+    logdet_inv_data = jnp.where(upper, logdet_inv_data, jnp.zeros_like(logdet_inv_data))
     logdet_g_data = gld * logdet_inv_data
     return (solve_g_data + logdet_g_data, lam)
 
@@ -160,6 +157,24 @@ def _cholesky_solve_and_logdet_bwd(indices, shape, backend_name, residuals, g):
 _cholesky_solve_and_logdet_impl.defvjp(
     _cholesky_solve_and_logdet_fwd, _cholesky_solve_and_logdet_bwd
 )
+
+
+def _sym_upper_solve_data_grad(indices: np.ndarray, lam: jax.Array, x: jax.Array):
+    """Gradient for an SPD matrix represented by its active upper triangle."""
+    row_idx = indices[0]
+    col_idx = indices[1]
+    contrib = -lam[row_idx] * x[col_idx]
+    offdiag = row_idx != col_idx
+    contrib_t = -lam[col_idx] * x[row_idx]
+    contrib = jnp.where(
+        offdiag[..., None] if contrib.ndim == 2 else offdiag,
+        contrib + contrib_t,
+        contrib,
+    )
+    if contrib.ndim == 2:
+        contrib = contrib.sum(axis=-1)
+    upper = row_idx <= col_idx
+    return jnp.where(upper, contrib, jnp.zeros_like(contrib))
 
 
 def cholesky_solve(

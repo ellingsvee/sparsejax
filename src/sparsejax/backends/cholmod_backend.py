@@ -58,10 +58,16 @@ def _get_or_build_factor(data_np: np.ndarray, indices: np.ndarray, shape):
         if cached is not indices:
             _FACTOR_CACHE.pop(key, None)
             entry = None
-    # scikit-sparse may need writable buffers internally — callback inputs
-    # are read-only, so copy once here.
-    data_w = np.array(data_np, copy=True)
-    A = sp.coo_matrix((data_w, (indices[0], indices[1])), shape=shape).tocsc()
+    # CHOLMOD's default factorization uses only the upper triangle. Build that
+    # view directly so full symmetric inputs do not pay to materialize a second
+    # triangle on the host.
+    row = np.asarray(indices[0])
+    col = np.asarray(indices[1])
+    upper = row <= col
+    # scikit-sparse may need writable buffers internally — callback inputs are
+    # read-only, so copy once here.
+    data_w = np.array(np.asarray(data_np)[upper], copy=True)
+    A = sp.coo_matrix((data_w, (row[upper], col[upper])), shape=shape).tocsc()
     if entry is None or entry.shape != shape:
         factor = cho_factor(A)
         try:

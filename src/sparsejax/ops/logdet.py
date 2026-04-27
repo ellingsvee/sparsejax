@@ -89,8 +89,15 @@ def _logdet_fwd(data, indices, shape, backend_name):
 
 def _logdet_bwd(indices, shape, backend_name, residuals, g):
     (data,) = residuals
+    inv_data = _dispatch_logdet_vjp_data(backend_name, data, indices, shape)
+    row_idx = indices[0]
+    col_idx = indices[1]
+    offdiag = row_idx != col_idx
+    upper = row_idx <= col_idx
+    inv_data = jnp.where(offdiag, 2.0 * inv_data, inv_data)
+    inv_data = jnp.where(upper, inv_data, jnp.zeros_like(inv_data))
 
-    return (g * _dispatch_logdet_vjp_data(backend_name, data, indices, shape),)
+    return (g * inv_data,)
 
 
 _logdet_impl.defvjp(_logdet_fwd, _logdet_bwd)
