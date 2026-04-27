@@ -18,21 +18,37 @@ extern "C" void sparsejax_launch_logabs_sum(cudaStream_t stream,
                                             const double *d_diag, int n,
                                             double scale, double *d_out);
 
-inline ffi::Error CudssSolveLogdetImpl(
-    cudaStream_t stream, int64_t matrix_type, int64_t factor_token,
-    ffi::Buffer<ffi::S32> row_ptr, ffi::Buffer<ffi::S32> col_idx,
-    ffi::Buffer<ffi::F64> data, ffi::Buffer<ffi::F64> b,
-    ffi::ResultBuffer<ffi::F64> x, ffi::ResultBuffer<ffi::F64> logdet) {
+inline ffi::Error
+CudssSolveLogdetImpl(cudaStream_t stream, int64_t matrix_type,
+                     int64_t factor_token, ffi::Buffer<ffi::S32> row_ptr,
+                     ffi::Buffer<ffi::S32> col_idx, ffi::Buffer<ffi::F64> data,
+                     ffi::Buffer<ffi::F64> b, ffi::ResultBuffer<ffi::F64> x,
+                     ffi::ResultBuffer<ffi::F64> logdet) {
+  // Layout convention: cuDSS dense matrices are COL_MAJOR with ld=n. The
+  // Python wrapper requests that layout for 2-D dense FFI buffers, so shape
+  // remains the public (n, nrhs) solve shape while the physical layout matches
+  // cuDSS.
   const auto &b_dims = b.dimensions();
   if (b_dims.size() < 1 || b_dims.size() > 2) {
     return ffi::Error::InvalidArgument("b must be 1-D or 2-D");
   }
-  const int64_t n = b_dims[0];
-  const int64_t nrhs = (b_dims.size() == 2) ? b_dims[1] : 1;
-
   const auto &rp_dims = row_ptr.dimensions();
-  if (rp_dims.size() != 1 || rp_dims[0] != n + 1) {
-    return ffi::Error::InvalidArgument("row_ptr must have shape (n+1,)");
+  if (rp_dims.size() != 1 || rp_dims[0] < 1) {
+    return ffi::Error::InvalidArgument("row_ptr must be 1-D with size n+1");
+  }
+  const int64_t n = rp_dims[0] - 1;
+  int64_t nrhs;
+  if (b_dims.size() == 1) {
+    if (b_dims[0] != n) {
+      return ffi::Error::InvalidArgument("1-D b length must equal n");
+    }
+    nrhs = 1;
+  } else {
+    if (b_dims[0] != n) {
+      return ffi::Error::InvalidArgument(
+          "2-D b must have shape (n, nrhs)");
+    }
+    nrhs = b_dims[1];
   }
   const int64_t nnz = col_idx.dimensions()[0];
   if (data.dimensions()[0] != nnz) {

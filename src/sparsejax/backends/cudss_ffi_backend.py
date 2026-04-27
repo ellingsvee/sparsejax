@@ -71,6 +71,13 @@ def is_available() -> bool:
 #   2 -> SYMMETRIC (LDLᵀ)
 # --------------------------------------------------------------------------
 _MTYPE = {"general": 0, "spd": 1, "symmetric": 2}
+# jax.ffi.ffi_call uses major-to-minor layout notation. For a 2-D
+# (rows, cols) buffer, (1, 0) asks XLA for column-major physical storage.
+_COL_MAJOR_2D = (1, 0)
+
+
+def _dense_ffi_layout(ndim: int) -> tuple[int, int] | None:
+    return _COL_MAJOR_2D if ndim == 2 else None
 
 
 def _call_cudss(
@@ -98,11 +105,13 @@ def _call_cudss(
     b64 = b.astype(jnp.float64)
 
     out_dtype = jnp.float64
-    out_shape = b.shape
+    dense_layout = _dense_ffi_layout(b.ndim)
 
     ffi_fn = jax.ffi.ffi_call(
         "cudss_solve",
-        jax.ShapeDtypeStruct(out_shape, out_dtype),
+        jax.ShapeDtypeStruct(b.shape, out_dtype),
+        input_layouts=(None, None, None, dense_layout),
+        output_layouts=dense_layout,
         vmap_method="sequential",
     )
     mt = _MTYPE[matrix_type]
@@ -160,6 +169,7 @@ def cholesky_solve_and_logdet(
     row_ptr = jnp.asarray(csr.indptr)
     col_idx = jnp.asarray(csr.col_idx)
     b64 = b.astype(jnp.float64)
+    dense_layout = _dense_ffi_layout(b.ndim)
 
     ffi_fn = jax.ffi.ffi_call(
         "cudss_solve_logdet",
@@ -167,6 +177,8 @@ def cholesky_solve_and_logdet(
             jax.ShapeDtypeStruct(b.shape, jnp.float64),
             jax.ShapeDtypeStruct((), jnp.float64),
         ),
+        input_layouts=(None, None, None, dense_layout),
+        output_layouts=(dense_layout, None),
         vmap_method="sequential",
     )
     mt = _MTYPE["spd"]

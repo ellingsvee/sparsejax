@@ -47,7 +47,7 @@ CudssLogdetImpl(cudaStream_t stream, int64_t matrix_type, int64_t factor_token,
     break; // SPD: det = prod(L_ii)^2
   case 2:
     scale = 1.0;
-    break; // LDLᵀ: det = prod(D_ii)
+    break; // LDL^T: det = prod(D_ii)
   case 0:
   default:
     scale = 1.0;
