@@ -130,7 +130,9 @@ def _spspmm_scipy_csr(
     if not B.has_canonical_format:
         B.sum_duplicates()
     C = (A @ B).tocoo()
-    index_dtype = _output_index_dtype(a_indices, b_indices, shape=(a_shape[0], b_shape[1]))
+    index_dtype = _output_index_dtype(
+        a_indices, b_indices, shape=(a_shape[0], b_shape[1])
+    )
     return (
         np.asarray(C.data),
         np.asarray(C.row, dtype=index_dtype),
@@ -141,9 +143,9 @@ def _spspmm_scipy_csr(
 
 def _resolve_spspmm_backend(A: SparseMatrix, backend: str | None) -> str:
     if backend is None or backend == "auto":
-        # Dynamic-output SpGEMM currently runs through a host callback. Routing
-        # that callback to CuPy can require very large cuSPARSE work buffers,
-        # while SciPy only sees host arrays already materialized by the callback.
+        # Dynamic-output SpGEMM currently runs through a host callback.
+        #
+        # Routing that callback to CuPy can require very large cuSPARSE work buffers, while SciPy only sees host arrays already materialized by the callback.
         return "scipy"
     return _resolve_backend(A, backend)
 

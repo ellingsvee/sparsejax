@@ -1,3 +1,7 @@
+"""
+Lowerings adapted from the jax.experimental.sparse module
+"""
+
 from __future__ import annotations
 
 from functools import lru_cache, partial
@@ -18,11 +22,7 @@ _HAVE_CPU = False
 
 
 def _ensure_registered() -> None:
-    """Forward jaxlib's sparse FFI capsules into the JAX FFI registry.
-
-    Idempotent. Re-registration raises on some JAX versions; we swallow
-    that to make repeated imports cheap.
-    """
+    """Forward jaxlib's sparse FFI capsules into the JAX FFI registry."""
     global _REGISTERED, _HAVE_GPU, _HAVE_CPU
     if _REGISTERED:
         return
@@ -167,9 +167,6 @@ def _csr_matmat_cpu_lowering(ctx, data, indices, indptr, B, *, shape, transpose)
             ctx, data, indices, indptr, B, shape=shape, transpose=transpose
         )
     if transpose:
-        # cpu_csr_sparse_dense_ffi has no transpose flag. Materialize CSR(Aᵀ)
-        # via a small Python helper (jit-friendly under host-callback) — but
-        # cleaner: switch to the jax fallback. Transposed CPU spdmm is rare.
         return mlir.lower_fun(_csr_matmat_jax_impl, multiple_results=False)(
             ctx, data, indices, indptr, B, shape=shape, transpose=transpose
         )
@@ -246,12 +243,7 @@ def _csr_matvec_cpu_lowering(ctx, data, indices, indptr, x, *, shape, transpose)
 
 
 def _csr_matvec_cpu_via_matmat(ctx, data, indices, indptr, x, *, shape):
-    """Lower spmv on CPU through the native ``cpu_csr_sparse_dense_ffi``.
-
-    The handler accepts both vector and matrix RHS, but here we promote
-    the vector via the surrounding lower_fun wrapper for shape symmetry
-    with the GPU path.
-    """
+    """Lower spmv on CPU through the native ``cpu_csr_sparse_dense_ffi``."""
     return mlir.lower_fun(
         partial(_csr_matvec_cpu_native_impl, shape=shape),
         multiple_results=False,

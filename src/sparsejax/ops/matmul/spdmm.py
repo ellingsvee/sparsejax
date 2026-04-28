@@ -18,13 +18,7 @@ def _spdmm_via_ffi(
     *,
     transpose: bool,
 ) -> jax.Array:
-    """Sparse-dense matmul as an XLA-lowered primitive.
-
-    The primitive itself dispatches to the right per-platform FFI handler
-    (cuSPARSE on CUDA, cpu_csr_sparse_dense_ffi on CPU) at MLIR-lowering
-    time, so the same call site works under jit on either device without
-    the caller having to know the device platform.
-    """
+    """Sparse-dense matmul as an XLA-lowered primitive."""
     from sparsejax.backends import _cusparse_lowering as cusp
 
     # jaxlib's CSR sparse FFI descriptors used here are int32-indexed.
@@ -93,13 +87,9 @@ def spdmm(
     transpose: bool = False,
     backend: str | None = "auto",
 ) -> jax.Array:
-    """Sparse-dense matmul: returns the dense product ``A @ X`` (or ``Aᵀ @ X``).
+    """Sparse-dense matmul: returns the dense product ``A @ X`` (or ``A^T @ X``).
 
-    JIT / grad / vmap compatible. Lowers to ``cpu_csr_sparse_dense_ffi`` on
-    CPU and ``cusparse_csr_matmat_ffi`` / ``cusparse_csr_matvec_ffi`` on
-    GPU; the per-platform dispatch happens at MLIR-lowering time. The
-    ``backend`` argument is accepted for symmetry with the SPD ops but
-    has no effect — dispatch follows the array's device.
+    The ``backend`` argument is accepted for symmetry with the SPD ops but has no effect...
     """
     del backend  # unused; kept for API symmetry
     if X.ndim not in (1, 2):
@@ -108,11 +98,6 @@ def spdmm(
     if X.shape[0] != out_shape[1]:
         raise ValueError(f"spdmm shape mismatch: A {out_shape} @ X {X.shape}")
     return _spdmm_impl(A.data, X, A.indices, A.shape, transpose)
-
-
-# ---------------------------------------------------------------------------
-# spmv — same dispatch, simpler shape handling
-# ---------------------------------------------------------------------------
 
 
 def spmv(

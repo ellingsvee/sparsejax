@@ -1,14 +1,4 @@
-"""cuDSS/cuSPARSE GPU backend via ``nvmath-python`` + ``cupy``.
-
-This is the "safe" GPU path: all ops still dispatch through
-``jax.pure_callback`` so inputs and outputs round-trip between JAX and
-cupy. It exists as a portable fallback for :mod:`cudss_ffi_backend`
-(which is the zero-copy, jit-native path) and for SpGEMM which is not
-covered by the cuDSS FFI handler.
-
-For solves, prefer :mod:`cudss_ffi_backend` — it avoids the host
-bounce entirely and is jit/grad/vmap-friendly.
-"""
+"""cuDSS/cuSPARSE GPU backend via ``nvmath-python`` + ``cupy``. Prefer :mod:`cudss_ffi_backend` whenever possible..."""
 
 from __future__ import annotations
 

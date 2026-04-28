@@ -241,9 +241,7 @@ def cholesky_factor(
 ) -> CholeskyFactor:
     """Factor ``A`` (SPD) for repeated solves.
 
-    Returns an object you can call like ``factor(b)``. Not usable inside
-    jit — this is a Python-level convenience for the factor-once,
-    solve-many pattern.
+    Returns an object you can call like ``factor(b)``. Not usable inside jit. This is a Python-level convenience for the factor-once, solve-many pattern.
     """
     backend_name = _resolve_backend(A, backend)
     data = np.asarray(A.data)

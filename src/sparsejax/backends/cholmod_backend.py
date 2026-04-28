@@ -66,7 +66,10 @@ def _get_or_build_factor(data_np: np.ndarray, indices: np.ndarray, shape):
     upper = row <= col
     # scikit-sparse may need writable buffers internally — callback inputs are
     # read-only, so copy once here.
-    data_w = np.array(np.asarray(data_np)[upper], copy=True)
+    # CHOLMOD is materially more robust in double precision. Keep this cast at
+    # the backend boundary so callers can still run the surrounding JAX graph in
+    # float32 and receive float32 outputs.
+    data_w = np.array(np.asarray(data_np)[upper], dtype=np.float64, copy=True)
     A = sp.coo_matrix((data_w, (row[upper], col[upper])), shape=shape).tocsc()
     if entry is None or entry.shape != shape:
         factor = cho_factor(A)
@@ -98,7 +101,7 @@ def cholesky_solve(
 
     def _host(data_h, b_h):
         factor = _get_or_build_factor(np.asarray(data_h), indices, shape)
-        x = factor.solve(np.array(b_h, copy=True))
+        x = factor.solve(np.array(b_h, dtype=np.float64, copy=True))
         x = np.asarray(x).astype(out_dtype, copy=False)
         if x.shape != out_shape:
             x = x.reshape(out_shape)
@@ -124,7 +127,7 @@ def cholesky_solve_and_logdet(
 
     def _host(data_h, b_h):
         factor = _get_or_build_factor(np.asarray(data_h), indices, shape)
-        x = factor.solve(np.array(b_h, copy=True))
+        x = factor.solve(np.array(b_h, dtype=np.float64, copy=True))
         x = np.asarray(x).astype(out_dtype, copy=False)
         if x.shape != x_shape:
             x = x.reshape(x_shape)
@@ -210,6 +213,6 @@ def build_factor(data: np.ndarray, indices: np.ndarray, shape):
     ld = float(factor.logdet())
 
     def _solve(b):
-        return jnp.asarray(factor.solve(np.array(b, copy=True)))
+        return jnp.asarray(factor.solve(np.array(b, dtype=np.float64, copy=True)))
 
     return CholeskyFactor(solve_fn=_solve, logdet_val=ld)

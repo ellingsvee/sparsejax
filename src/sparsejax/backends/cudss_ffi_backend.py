@@ -78,15 +78,12 @@ def is_available() -> bool:
         return False
 
 
-# --------------------------------------------------------------------------
 # matrix_type encoding (must match the C switch in cudss_spd_solve.h)
 #   0 -> GENERAL (LU)
 #   1 -> SPD     (Cholesky)
 #   2 -> SYMMETRIC (LDLᵀ)
-# --------------------------------------------------------------------------
 _MTYPE = {"general": 0, "spd": 1, "symmetric": 2}
-# jax.ffi.ffi_call uses major-to-minor layout notation. For a 2-D
-# (rows, cols) buffer, (1, 0) asks XLA for column-major physical storage.
+# jax.ffi.ffi_call uses major-to-minor layout notation. For a 2-D (rows, cols) buffer, (1, 0) asks XLA for column-major physical storage.
 _COL_MAJOR_2D = (1, 0)
 
 
