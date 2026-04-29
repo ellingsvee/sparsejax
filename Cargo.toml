@@ -12,3 +12,4 @@ crate-type = ["cdylib"]
 [dependencies]
 numpy = "0.28.0"
 pyo3 = "0.28.2"
+rayon = "1.12.0"

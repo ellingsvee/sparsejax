@@ -22,7 +22,7 @@ def _dispatch_solve(
         from sparsejax.backends import scipy_backend
 
         return scipy_backend.solve(data, row, col, shape, b, method=method)
-    if backend_name == "cholmod":
+    if backend_name in ("cholmod", "cholmod_takahashi"):
         from sparsejax.backends import cholmod_backend
 
         indices = np.stack([np.asarray(row), np.asarray(col)], axis=0)

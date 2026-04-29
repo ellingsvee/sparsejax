@@ -69,6 +69,8 @@ def select_backend(device_kind: str, *, spd: bool = False) -> str:
         return "cudss_ffi"
     if device_kind == "gpu" and is_available("cudss"):
         return "cudss"
+    if spd and is_available("cholmod_takahashi"):
+        return "cholmod_takahashi"
     if spd and is_available("cholmod"):
         return "cholmod"
     if is_available("scipy"):

@@ -266,7 +266,7 @@ def cholesky_factor(
     """
     backend_name = _resolve_backend(A, backend)
     data = np.asarray(A.data)
-    if backend_name == "cholmod":
+    if backend_name in ("cholmod", "cholmod_takahashi"):
         from sparsejax.backends import cholmod_backend
 
         return cholmod_backend.build_factor(data, A.indices, A.shape)

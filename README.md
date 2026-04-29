@@ -5,15 +5,12 @@ Sparse operations for JAX, with optional CPU/GPU backends. All operations suppor
 For CPU
 
 - `cholmod`: Compute Cholesky factorization using CHOLMOD (through `scikit-sparse`). This can be used to solve liner systems and compute log-determinants.
+- `cholmod_takahashi`: Uses CHOLMOD for factorization and a Rust implementation of the Takahashi selected-inverse recurrence for log-det gradients. This is preferred automatically for SPD CPU matrices when the Rust extension is available.
 - `scipy.sparse`: Installed by default.
 
 For GPU
 
 - `cuda`: Utilize the cuSPARSE and cuDSS libraries. Note that the `cudss_ffi` is highly recommended as it used the XLA FFI interface. However, this requires building the C++ backend from source.
-
-Experimental:
-
-- `cholmod_takahashi`: Compute the log-det gradient using the Takahashi method on the Cholesky factor. I have implemented this in Rust, but the performance is not competitive with f.ex. the PARDISO implementation. Use with caution!
 
 ## Development install
 
@@ -25,7 +22,7 @@ uv build
 
 ## Optional Rust backend
 
-There is an experimental Rust which computes the log-det gradient from CHOLMOD's Cholesky factor using the Rust Takahashi implementation instead of solving against all sparse columns. It is used through the experimental `backend="cholmod_takahashi"` path.
+There is an optional Rust backend which computes the log-det gradient from CHOLMOD's Cholesky factor using the Takahashi selected-inverse recurrence instead of solving against all sparse columns. It is used through `backend="cholmod_takahashi"` and is selected by `backend="auto"` for SPD CPU matrices when available.
 
 This backend needs both:
 
