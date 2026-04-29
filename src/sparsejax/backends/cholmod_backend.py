@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import weakref
 
 import jax
@@ -19,14 +20,15 @@ def _require_cholmod():
 
 
 class _CachedFactor:
-    __slots__ = ("factor", "shape", "indices_ref")
+    __slots__ = ("factor", "shape", "indices_ref", "data_digest")
 
-    def __init__(self, factor, shape, indices_ref):
+    def __init__(self, factor, shape, indices_ref, data_digest):
         self.factor = factor
         self.shape = shape
         # Weak ref to the indices ndarray; strong ref would pin it for
         # the process lifetime and defeat weakref-finalize cleanup.
         self.indices_ref = indices_ref
+        self.data_digest = data_digest
 
 
 # Map id(indices) -> _CachedFactor. Strong-ref dict (a previous
@@ -38,6 +40,15 @@ _FACTOR_CACHE: dict[int, _CachedFactor] = {}
 
 def _on_indices_collected(key: int) -> None:
     _FACTOR_CACHE.pop(key, None)
+
+
+def _numeric_digest(data: np.ndarray) -> bytes:
+    arr = np.ascontiguousarray(data)
+    h = hashlib.blake2b(digest_size=16)
+    h.update(arr.dtype.str.encode())
+    h.update(np.asarray(arr.shape, dtype=np.int64).tobytes())
+    h.update(arr.view(np.uint8))
+    return h.digest()
 
 
 def _get_or_build_factor(data_np: np.ndarray, indices: np.ndarray, shape):
@@ -70,6 +81,10 @@ def _get_or_build_factor(data_np: np.ndarray, indices: np.ndarray, shape):
     # the backend boundary so callers can still run the surrounding JAX graph in
     # float32 and receive float32 outputs.
     data_w = np.array(np.asarray(data_np)[upper], dtype=np.float64, copy=True)
+    data_digest = _numeric_digest(data_w)
+    if entry is not None and entry.shape == shape and entry.data_digest == data_digest:
+        return entry.factor
+
     A = sp.coo_matrix((data_w, (row[upper], col[upper])), shape=shape).tocsc()
     if entry is None or entry.shape != shape:
         factor = cho_factor(A)
@@ -77,7 +92,7 @@ def _get_or_build_factor(data_np: np.ndarray, indices: np.ndarray, shape):
             indices_ref = weakref.ref(indices)
         except TypeError:
             indices_ref = None
-        entry = _CachedFactor(factor, shape, indices_ref)
+        entry = _CachedFactor(factor, shape, indices_ref, data_digest)
         _FACTOR_CACHE[key] = entry
         try:
             weakref.finalize(indices, _on_indices_collected, key)
@@ -87,6 +102,7 @@ def _get_or_build_factor(data_np: np.ndarray, indices: np.ndarray, shape):
     else:
         # numerical refactorization on the cached symbolic ordering
         entry.factor.factorize(A)
+        entry.data_digest = data_digest
     return entry.factor
 
 
