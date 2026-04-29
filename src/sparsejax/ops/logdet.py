@@ -8,6 +8,7 @@ import numpy as np
 
 from sparsejax.sparse import SparseMatrix
 
+from sparsejax.dense_mode import is_dense_mode
 from sparsejax.utils import _resolve_backend
 
 
@@ -111,5 +112,7 @@ def logdet(
     """Log-determinant of an SPD sparse matrix."""
     if A.shape[0] != A.shape[1]:
         raise ValueError(f"logdet requires square matrix, got {A.shape}")
+    if is_dense_mode():
+        return jnp.linalg.slogdet(A.to_dense())[1]
     backend_name = _resolve_backend(A, backend)
     return _logdet_impl(A.data, A.indices, A.shape, backend_name)

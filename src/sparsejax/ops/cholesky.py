@@ -6,8 +6,25 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from sparsejax.dense_mode import is_dense_mode
 from sparsejax.sparse import SparseMatrix
 from sparsejax.utils import _resolve_backend
+
+
+def _dense_cholesky_solve(A: SparseMatrix, b: jax.Array) -> jax.Array:
+    Ad = A.to_dense()
+    L = jnp.linalg.cholesky(Ad)
+    return jax.scipy.linalg.cho_solve((L, True), b)
+
+
+def _dense_cholesky_solve_and_logdet(
+    A: SparseMatrix, b: jax.Array
+) -> tuple[jax.Array, jax.Array]:
+    Ad = A.to_dense()
+    L = jnp.linalg.cholesky(Ad)
+    x = jax.scipy.linalg.cho_solve((L, True), b)
+    ld = 2.0 * jnp.sum(jnp.log(jnp.diag(L)))
+    return x, ld
 
 
 def _dispatch_chol_solve(
@@ -190,6 +207,8 @@ def cholesky_solve(
     """
     if b.shape[0] != A.shape[0]:
         raise ValueError(f"shape mismatch: A is {A.shape}, b is {b.shape}")
+    if is_dense_mode():
+        return _dense_cholesky_solve(A, b)
     backend_name = _resolve_backend(A, backend)
     return _cholesky_solve_impl(A.data, b, A.indices, A.shape, backend_name)
 
@@ -210,6 +229,8 @@ def cholesky_solve_and_logdet(
         raise ValueError(f"shape mismatch: A is {A.shape}, b is {b.shape}")
     if A.shape[0] != A.shape[1]:
         raise ValueError(f"logdet requires square matrix, got {A.shape}")
+    if is_dense_mode():
+        return _dense_cholesky_solve_and_logdet(A, b)
     backend_name = _resolve_backend(A, backend)
     return _cholesky_solve_and_logdet_impl(A.data, b, A.indices, A.shape, backend_name)
 

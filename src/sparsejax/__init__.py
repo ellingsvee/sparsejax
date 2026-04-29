@@ -1,19 +1,6 @@
-"""sparsejax — Sparse linear algebra for JAX.
+"""sparsejax — Some sparse linear algebra for JAX."""
 
-Public API:
-
-    from sparsejax import SparseMatrix, spmv, spspmm, spsolve, cholesky_solve
-
-The container (:class:`SparseMatrix`) is a registered pytree whose traced
-leaf is the value array; indices and shape are static. All ops support
-autograd via ``jax.grad`` through the values and right-hand side.
-
-Backends are pluggable. The current default on CPU is SciPy (via
-``jax.pure_callback``). SuiteSparse Cholmod is optional for SPD matrices
-(install ``scikit-sparse``). GPU via NVIDIA cuDSS is planned via the
-JAX FFI — see ``csrc/README.md``.
-"""
-
+from .dense_mode import dense_mode, is_dense_mode
 from .sparse import SparseMatrix, SparseStructure
 from .ops import (
     spmv,
@@ -36,6 +23,8 @@ from . import backends
 __all__ = [
     "SparseMatrix",
     "SparseStructure",
+    "dense_mode",
+    "is_dense_mode",
     "spmv",
     "spdmm",
     "spspmm",
