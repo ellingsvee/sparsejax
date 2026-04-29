@@ -6,17 +6,17 @@ import jax
 
 jax.config.update("jax_enable_x64", True)
 
-import jax.numpy as jnp
-import numpy as np
-import pytest
+import jax.numpy as jnp  # noqa: E402
+import numpy as np  # noqa: E402
+import pytest  # noqa: E402
 
-from sparsejax import SparseMatrix, spspmm
+from sparsejax import SparseMatrix, spspmm  # noqa: E402
 
 spspmm_module = importlib.import_module("sparsejax.ops.matmul.spspmm")
 
 
 def _backends():
-    out = ["scipy"]
+    out = ["static", "scipy"]
     try:
         if any(d.platform == "gpu" for d in jax.devices()):
             try:
@@ -30,7 +30,7 @@ def _backends():
     return out
 
 
-def test_spspmm_auto_prefers_host_backend_for_dynamic_spgemm(monkeypatch):
+def test_spspmm_auto_prefers_static_pattern_backend(monkeypatch):
     A = SparseMatrix.from_coo([1.0], [0], [0], (1, 1))
 
     monkeypatch.setattr(
@@ -39,8 +39,23 @@ def test_spspmm_auto_prefers_host_backend_for_dynamic_spgemm(monkeypatch):
         lambda *_args, **_kwargs: "cudss_ffi",
     )
 
-    assert spspmm_module._resolve_spspmm_backend(A, "auto") == "scipy"
-    assert spspmm_module._resolve_spspmm_backend(A, None) == "scipy"
+    assert spspmm_module._resolve_spspmm_backend(A, "auto") == "static"
+    assert spspmm_module._resolve_spspmm_backend(A, None) == "static"
+
+
+def test_spspmm_static_handles_duplicate_input_entries():
+    a_indices = np.asarray([[0, 0, 1], [0, 0, 1]], dtype=np.int32)
+    b_indices = np.asarray([[0, 1], [1, 0]], dtype=np.int32)
+    a_data = jnp.asarray([2.0, 3.0, 5.0])
+    b_data = jnp.asarray([7.0, 11.0])
+    A = SparseMatrix(data=a_data, indices=a_indices, shape=(2, 2))
+    B = SparseMatrix(data=b_data, indices=b_indices, shape=(2, 2))
+
+    C = spspmm(A, B, backend="static")
+
+    A_dense = A.to_dense()
+    B_dense = B.to_dense()
+    np.testing.assert_allclose(np.asarray(C.to_dense()), np.asarray(A_dense @ B_dense))
 
 
 @pytest.mark.parametrize("backend", _backends())
@@ -85,7 +100,7 @@ def test_spspmm_grad_dense_pattern(backend):
         A = SparseMatrix(data=a, indices=indices, shape=(n, n))
         B = SparseMatrix(data=b, indices=indices, shape=(n, n))
         C = spspmm(A, B, backend=backend)
-        return jnp.sum(C.data ** 2)
+        return jnp.sum(C.data**2)
 
     def loss_dense(a, b):
         Ad = a.reshape(n, n)
@@ -121,7 +136,7 @@ def test_spspmm_grad_sparse_pattern(backend):
         A = SparseMatrix(data=a_data, indices=a_indices, shape=(m, k))
         B = SparseMatrix(data=b_data, indices=b_indices, shape=(k, n))
         C = spspmm(A, B, backend=backend)
-        return jnp.sum(C.data ** 2)
+        return jnp.sum(C.data**2)
 
     def loss_dense(a_data, b_data):
         Ad = jnp.zeros((m, k)).at[a_rows, a_cols].add(a_data)
@@ -163,9 +178,7 @@ def test_spspmm_jit(backend):
         indices=spspmm(As, Bs, backend=backend).indices,
         shape=(m, n),
     )
-    np.testing.assert_allclose(
-        np.asarray(C.to_dense()), A_dense @ B_dense, atol=1e-10
-    )
+    np.testing.assert_allclose(np.asarray(C.to_dense()), A_dense @ B_dense, atol=1e-10)
 
 
 @pytest.mark.parametrize("backend", _backends())
