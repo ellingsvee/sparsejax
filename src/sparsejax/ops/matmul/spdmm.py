@@ -6,6 +6,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from sparsejax.dense_mode import is_dense_mode
 from sparsejax.sparse import SparseMatrix
 from sparsejax._csr import coo_to_csr
 
@@ -97,6 +98,9 @@ def spdmm(
     out_shape = (A.shape[1], A.shape[0]) if transpose else A.shape
     if X.shape[0] != out_shape[1]:
         raise ValueError(f"spdmm shape mismatch: A {out_shape} @ X {X.shape}")
+    if is_dense_mode():
+        Ad = A.to_dense()
+        return Ad.T @ X if transpose else Ad @ X
     return _spdmm_impl(A.data, X, A.indices, A.shape, transpose)
 
 
@@ -111,4 +115,7 @@ def spmv(
     out_shape = (A.shape[1], A.shape[0]) if transpose else A.shape
     if x.shape[0] != out_shape[1]:
         raise ValueError(f"spmv shape mismatch: A is {out_shape}, x is {x.shape}")
+    if is_dense_mode():
+        Ad = A.to_dense()
+        return Ad.T @ x if transpose else Ad @ x
     return _spdmm_impl(A.data, x, A.indices, A.shape, transpose)

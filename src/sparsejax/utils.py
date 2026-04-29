@@ -25,7 +25,14 @@ def _device_kind_for_data(data) -> str:
         pass
 
     # Inside jit/grad, ``data`` may be a tracer without a concrete device.
-    # Prefer JAX's active default backend instead of silently falling back to CPU.
+    # Use the active ``jax.default_device`` (set by the context manager).
+    try:
+        default_dev = jax.config.values.get("jax_default_device")
+        platform = getattr(default_dev, "platform", None)
+        if platform is not None:
+            return _normalize_device_kind(platform)
+    except Exception:
+        pass
     try:
         return _normalize_device_kind(jax.default_backend())
     except Exception:

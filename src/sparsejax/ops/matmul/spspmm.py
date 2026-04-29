@@ -8,6 +8,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from sparsejax._csr import coo_to_csr
+from sparsejax.dense_mode import is_dense_mode
 from sparsejax.sparse import SparseMatrix
 from sparsejax.utils import _resolve_backend
 
@@ -446,6 +447,11 @@ def spspmm(
     backend_name = _resolve_spspmm_backend(A, backend)
     c_shape = (A.shape[0], B.shape[1])
     c_indices = _cached_pattern(A.indices, A.shape, B.indices, B.shape)
+    if is_dense_mode():
+        Cd = A.to_dense() @ B.to_dense()
+        c_row = jnp.asarray(c_indices[0])
+        c_col = jnp.asarray(c_indices[1])
+        return SparseMatrix(data=Cd[c_row, c_col], indices=c_indices, shape=c_shape)
     c_data = _spspmm_impl(
         A.data,
         B.data,
