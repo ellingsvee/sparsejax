@@ -2,27 +2,116 @@ from __future__ import annotations
 
 import hashlib
 import weakref
+from dataclasses import dataclass
+from typing import Callable
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
 
+@dataclass(frozen=True)
+class _CholmodApi:
+    name: str
+    factorize: Callable
+
+
+_CHOLMOD_API: _CholmodApi | None = None
+
+
 def _require_cholmod():
+    global _CHOLMOD_API
+    if _CHOLMOD_API is not None:
+        return _CHOLMOD_API
+
     try:
         from sksparse.cholmod import cho_factor as _cho_factor  # type: ignore
+    except ImportError:  # pragma: no cover - env-dependent
+        try:
+            from sksparse.cholmod import cholesky as _cholesky  # type: ignore
+        except ImportError as legacy_api_error:
+            raise RuntimeError(
+                "cholmod backend requires scikit-sparse. "
+                "Install with `uv pip install scikit-sparse`."
+            ) from legacy_api_error
+        _CHOLMOD_API = _CholmodApi("legacy", _cholesky)
+    else:
+        _CHOLMOD_API = _CholmodApi("new", _cho_factor)
+    return _CHOLMOD_API
+
+
+def _refactorize(api: _CholmodApi, factor, A):
+    if api.name == "new":
+        factor.factorize(A)
+    else:
+        factor.cholesky_inplace(A)
+
+
+def _solve_factor(api: _CholmodApi, factor, b):
+    if api.name == "new":
+        return factor.solve(b)
+    return factor.solve_A(b)
+
+
+def _factor_l(api: _CholmodApi, factor):
+    if api.name == "new":
+        return factor.L
+    return factor.L()
+
+
+def _factor_perm(api: _CholmodApi, factor) -> np.ndarray:
+    if api.name == "new":
+        return np.asarray(factor.get_perm(), dtype=np.int32)
+    return np.asarray(factor.P(), dtype=np.int32)
+
+
+def _coo_from_upper(api: _CholmodApi, data, row, col, upper, shape):
+    import scipy.sparse as sp
+
+    if api.name == "new":
+        # scikit-sparse >= 0.5.0 uses the upper triangle by default.
+        return sp.coo_matrix(
+            (data, (row[upper], col[upper])),
+            shape=shape,
+        ).tocsc()
+
+    # Older scikit-sparse uses the lower triangle of the matrix it receives.
+    # Callers expose the active SPD structure as an upper-triangle view, so
+    # transpose that view into the lower triangle for the legacy API.
+    return sp.coo_matrix(
+        (data, (col[upper], row[upper])),
+        shape=shape,
+    ).tocsc()
+
+
+def _factorize_with_fallback(api: _CholmodApi, make_A):
+    global _CHOLMOD_API
+
+    A = make_A(api)
+    try:
+        return api.factorize(A), api
+    except AttributeError as e:
+        if api.name != "new":
+            raise
+        try:
+            from sksparse.cholmod import cholesky as _cholesky  # type: ignore
+        except ImportError:
+            raise e
+        fallback_api = _CholmodApi("legacy", _cholesky)
+        _CHOLMOD_API = fallback_api
+        return fallback_api.factorize(make_A(fallback_api)), fallback_api
     except ImportError as e:  # pragma: no cover - env-dependent
         raise RuntimeError(
             "cholmod backend requires scikit-sparse. "
             "Install with `uv pip install scikit-sparse`."
         ) from e
-    return _cho_factor
 
 
 class _CachedFactor:
-    __slots__ = ("factor", "shape", "indices_ref", "data_digest")
+    __slots__ = ("api", "factor", "shape", "indices_ref", "data_digest")
 
-    def __init__(self, factor, shape, indices_ref, data_digest):
+    def __init__(self, api, factor, shape, indices_ref, data_digest):
+        self.api = api
         self.factor = factor
         self.shape = shape
         # Weak ref to the indices ndarray; strong ref would pin it for
@@ -51,12 +140,10 @@ def _numeric_digest(data: np.ndarray) -> bytes:
     return h.digest()
 
 
-def _get_or_build_factor(data_np: np.ndarray, indices: np.ndarray, shape):
+def _get_or_build_factor_entry(data_np: np.ndarray, indices: np.ndarray, shape):
     """Return a cholmod factor for (indices, shape), numerically refreshed to
     ``data_np``. Symbolic analysis is cached by ``id(indices)``."""
-    import scipy.sparse as sp
-
-    cho_factor = _require_cholmod()
+    api = _require_cholmod()
 
     key = id(indices)
     entry = _FACTOR_CACHE.get(key)
@@ -82,17 +169,27 @@ def _get_or_build_factor(data_np: np.ndarray, indices: np.ndarray, shape):
     # float32 and receive float32 outputs.
     data_w = np.array(np.asarray(data_np)[upper], dtype=np.float64, copy=True)
     data_digest = _numeric_digest(data_w)
-    if entry is not None and entry.shape == shape and entry.data_digest == data_digest:
-        return entry.factor
+    if (
+        entry is not None
+        and entry.api == api
+        and entry.shape == shape
+        and entry.data_digest == data_digest
+    ):
+        return entry
 
-    A = sp.coo_matrix((data_w, (row[upper], col[upper])), shape=shape).tocsc()
+    if entry is not None and entry.api != api:
+        entry = None
+
+    def make_A(api: _CholmodApi):
+        return _coo_from_upper(api, data_w, row, col, upper, shape)
+
     if entry is None or entry.shape != shape:
-        factor = cho_factor(A)
+        factor, api = _factorize_with_fallback(api, make_A)
         try:
             indices_ref = weakref.ref(indices)
         except TypeError:
             indices_ref = None
-        entry = _CachedFactor(factor, shape, indices_ref, data_digest)
+        entry = _CachedFactor(api, factor, shape, indices_ref, data_digest)
         _FACTOR_CACHE[key] = entry
         try:
             weakref.finalize(indices, _on_indices_collected, key)
@@ -101,9 +198,13 @@ def _get_or_build_factor(data_np: np.ndarray, indices: np.ndarray, shape):
             pass
     else:
         # numerical refactorization on the cached symbolic ordering
-        entry.factor.factorize(A)
+        _refactorize(entry.api, entry.factor, make_A(entry.api))
         entry.data_digest = data_digest
-    return entry.factor
+    return entry
+
+
+def _get_or_build_factor(data_np: np.ndarray, indices: np.ndarray, shape):
+    return _get_or_build_factor_entry(data_np, indices, shape).factor
 
 
 def cholesky_solve(
@@ -116,8 +217,12 @@ def cholesky_solve(
     out_dtype = jnp.result_type(data.dtype, b.dtype)
 
     def _host(data_h, b_h):
-        factor = _get_or_build_factor(np.asarray(data_h), indices, shape)
-        x = factor.solve(np.array(b_h, dtype=np.float64, copy=True))
+        entry = _get_or_build_factor_entry(np.asarray(data_h), indices, shape)
+        x = _solve_factor(
+            entry.api,
+            entry.factor,
+            np.array(b_h, dtype=np.float64, copy=True),
+        )
         x = np.asarray(x).astype(out_dtype, copy=False)
         if x.shape != out_shape:
             x = x.reshape(out_shape)
@@ -142,12 +247,16 @@ def cholesky_solve_and_logdet(
     ld_dtype = data.dtype
 
     def _host(data_h, b_h):
-        factor = _get_or_build_factor(np.asarray(data_h), indices, shape)
-        x = factor.solve(np.array(b_h, dtype=np.float64, copy=True))
+        entry = _get_or_build_factor_entry(np.asarray(data_h), indices, shape)
+        x = _solve_factor(
+            entry.api,
+            entry.factor,
+            np.array(b_h, dtype=np.float64, copy=True),
+        )
         x = np.asarray(x).astype(out_dtype, copy=False)
         if x.shape != x_shape:
             x = x.reshape(x_shape)
-        ld = np.asarray(factor.logdet(), dtype=ld_dtype)
+        ld = np.asarray(entry.factor.logdet(), dtype=ld_dtype)
         return x, ld
 
     return jax.pure_callback(
@@ -201,9 +310,9 @@ def selected_inverse_entries_takahashi(
                 "Build it with `uv run --extra rust maturin develop --release`."
             ) from e
 
-        factor = _get_or_build_factor(np.asarray(data_h), indices, shape)
-        L = factor.L
-        perm = np.asarray(factor.get_perm(), dtype=np.int32)
+        entry = _get_or_build_factor_entry(np.asarray(data_h), indices, shape)
+        L = _factor_l(entry.api, entry.factor)
+        perm = _factor_perm(entry.api, entry.factor)
         gathered = takahashi_masked(
             np.asarray(L.indptr, dtype=np.int32),
             np.asarray(L.indices, dtype=np.int32),
@@ -225,10 +334,16 @@ def selected_inverse_entries_takahashi(
 def build_factor(data: np.ndarray, indices: np.ndarray, shape):
     from sparsejax.ops.cholesky import CholeskyFactor
 
-    factor = _get_or_build_factor(np.asarray(data), indices, shape)
-    ld = float(factor.logdet())
+    entry = _get_or_build_factor_entry(np.asarray(data), indices, shape)
+    ld = float(entry.factor.logdet())
 
-    def _solve(b):
-        return jnp.asarray(factor.solve(np.array(b, dtype=np.float64, copy=True)))
+    def solve(b):
+        return jnp.asarray(
+            _solve_factor(
+                entry.api,
+                entry.factor,
+                np.array(b, dtype=np.float64, copy=True),
+            )
+        )
 
-    return CholeskyFactor(solve_fn=_solve, logdet_val=ld)
+    return CholeskyFactor(solve_fn=solve, logdet_val=ld)
