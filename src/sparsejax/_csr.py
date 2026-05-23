@@ -1,9 +1,6 @@
-"""COO to CSR conversion + per-pattern factor token issuance.
+"""COO to CSR conversion
 
-A factor token is a stable, process-unique int64 that identifies a sparsity
-pattern. Native FFI backends (cuDSS) use it as a cache key for the cuDSS
-analysis phase, so repeated calls with the same indices array — even with
-different numerical values — reuse the symbolic factorization.
+Also ensure the factor token is stable. This is a process-unique integer that serves as a key for caching the symbolic factorization.
 """
 
 from __future__ import annotations
@@ -16,24 +13,15 @@ import numpy as np
 
 
 class CsrStructure(NamedTuple):
-    indptr: np.ndarray  # int32/int64, shape (n_rows + 1,)
-    col_idx: np.ndarray  # int32/int64, shape (nnz,)
-    order: np.ndarray  # int64, data-permutation (data_csr = data[order])
+    indptr: np.ndarray
+    col_idx: np.ndarray
+    order: np.ndarray
     order_is_identity: bool
     shape: Tuple[int, int]
-    factor_token: int  # nonzero, stable per indices array
-    # Weak ref to the indices ndarray this structure was built for, used to
-    # detect id reuse on cache lookup. Strong ref would pin `indices` for
-    # the process lifetime and defeat the weakref-finalize cleanup.
+    factor_token: int
     indices_ref: "weakref.ReferenceType[np.ndarray] | None"
 
 
-# Map (id(indices), index_dtype) -> CsrStructure. The cache holds a strong ref
-# to the CsrStructure (the previous WeakValueDictionary design dropped it
-# instantly because nothing else held one, which silently invalidated the
-# factor_token across calls). Lifetime is tied to the indices array via
-# weakref.finalize, which removes the entry — and frees the cuDSS cached
-# state — when indices is GC'd.
 _CACHE: dict[tuple[int, str], CsrStructure] = {}
 _TOKEN_LOCK = threading.Lock()
 _NEXT_TOKEN = 1
@@ -128,12 +116,7 @@ def coo_to_csr(
     key = (id(indices), dt.str, "upper" if upper else "full")
     entry = _CACHE.get(key)
     if entry is not None and entry.shape == shape:
-        # Reject stale entries left behind by id reuse: if the cached
-        # weakref still resolves to a different object, or has expired
-        # while a new ndarray now occupies the same id, we treat it as a
-        # miss. (`indices_ref is None` means the original wasn't
-        # weakref-able; we can't verify identity, so we trust the id and
-        # accept the small id-reuse risk for that path.)
+        # Reject stale entries left behind by id reuse
         cached = entry.indices_ref() if entry.indices_ref is not None else None
         if entry.indices_ref is None or cached is indices:
             return entry
@@ -185,6 +168,5 @@ def coo_to_csr(
     try:
         weakref.finalize(indices, _on_indices_collected, key, token)
     except TypeError:
-        # Object isn't weakref-able — fall back to leaking the entry.
         pass
     return csr

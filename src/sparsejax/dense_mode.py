@@ -1,8 +1,6 @@
-"""A dense mode that bypasses the sparse implementations and instad uses dense JAX operations.
+"""A dense mode that bypasses the sparse implementations and instad uses dense JAX operations. Useful for testing and benchmarking.
 
-The idea is that this can be used for testing, benchmarking and debugging, and provides a simple way to compare. However, unsure if this should be a part of the final package or not.
-
-To use the dense mode, simply wrap the code you want to run in a `with dense_mode():` block. For example:
+Use by wrapping the code you want to run in a `with dense_mode():` block. For example:
 ```python
 import sparsejax as sj
 with sj.dense_mode():

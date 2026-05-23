@@ -90,7 +90,7 @@ def spdmm(
 ) -> jax.Array:
     """Sparse-dense matmul: returns the dense product ``A @ X`` (or ``A^T @ X``).
 
-    The ``backend`` argument is accepted for symmetry with the SPD ops but has no effect...
+    The ``backend`` argument is accepted for symmetry with the SPD ops, but has no effect...
     """
     del backend  # unused; kept for API symmetry
     if X.ndim not in (1, 2):

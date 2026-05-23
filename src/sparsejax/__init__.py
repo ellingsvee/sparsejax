@@ -1,5 +1,3 @@
-"""sparsejax — Some sparse linear algebra for JAX."""
-
 from .dense_mode import dense_mode, is_dense_mode
 from .sparse import SparseMatrix, SparseStructure
 from .ops import (

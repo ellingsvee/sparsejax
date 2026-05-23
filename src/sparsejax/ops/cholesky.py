@@ -200,11 +200,7 @@ def cholesky_solve(
     *,
     backend: str | None = "auto",
 ) -> jax.Array:
-    """Solve ``A x = b`` for a sparse SPD ``A``.
-
-    Uses CHOLMOD on CPU and cuDSS (via FFI if available) on GPU. AD is
-    supported through ``data`` and ``b``.
-    """
+    """Solve ``A x = b`` for a sparse SPD ``A``."""
     if b.shape[0] != A.shape[0]:
         raise ValueError(f"shape mismatch: A is {A.shape}, b is {b.shape}")
     if is_dense_mode():
@@ -219,12 +215,7 @@ def cholesky_solve_and_logdet(
     *,
     backend: str | None = "auto",
 ) -> tuple[jax.Array, jax.Array]:
-    """Solve ``A x = b`` and return ``(x, logdet(A))`` from one factorization.
-
-    On the CHOLMOD backend this is a single host callback and a single numeric
-    factorization in the forward pass. Its VJP batches the solve cotangent and
-    logdet inverse-column solve into one backend solve.
-    """
+    """Solve ``A x = b`` and return ``(x, logdet(A))`` from one factorization."""
     if b.shape[0] != A.shape[0]:
         raise ValueError(f"shape mismatch: A is {A.shape}, b is {b.shape}")
     if A.shape[0] != A.shape[1]:
@@ -262,7 +253,7 @@ def cholesky_factor(
 ) -> CholeskyFactor:
     """Factor ``A`` (SPD) for repeated solves.
 
-    Returns an object you can call like ``factor(b)``. Not usable inside jit. This is a Python-level convenience for the factor-once, solve-many pattern.
+    Returns an object you can call like ``factor(b)``. Not usable inside jit.
     """
     backend_name = _resolve_backend(A, backend)
     data = np.asarray(A.data)

@@ -1,5 +1,3 @@
-"""Diagonal x sparse fast paths that stay in XLA."""
-
 from __future__ import annotations
 
 import jax.numpy as jnp

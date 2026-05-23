@@ -1,5 +1,3 @@
-"""Sparse matrix constructors for common patterns (identity, diagonal)."""
-
 from __future__ import annotations
 
 import jax.numpy as jnp

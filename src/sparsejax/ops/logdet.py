@@ -46,12 +46,8 @@ def _dispatch_logdet_vjp_data(
         return cholmod_backend.selected_inverse_entries_takahashi(data, indices, shape)
 
     # TODO: There is still some redundant work here when A has multiple entries in the same column.
-    # The ideal solution is still to use the selected inversion algorithm.
-    # Current solution:
-    # We need A^{-1} only at A's nonzero pattern. Solve A X = E where the
-    # columns of E are the standard basis vectors for the unique columns
-    # appearing in A.indices[1], then gather A^{-1}[row[k], col[k]] from
-    # X[row[k], inv_idx[k]].
+    # The ideal solution is still to use a GPU-version of the selected inversion algorithm.
+    # However, this is hard, as there is some serial work needed for the selected inversion.
     row_arr = np.asarray(indices[0], dtype=np.int64)
     col_arr = np.asarray(indices[1], dtype=np.int64)
     n = shape[0]

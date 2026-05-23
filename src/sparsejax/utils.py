@@ -25,7 +25,6 @@ def _device_kind_for_data(data) -> str:
         pass
 
     # Inside jit/grad, ``data`` may be a tracer without a concrete device.
-    # Use the active ``jax.default_device`` (set by the context manager).
     try:
         default_dev = jax.config.values.get("jax_default_device")
         platform = getattr(default_dev, "platform", None)
