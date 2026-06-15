@@ -13,7 +13,7 @@ dependencies = ["jax>=0.7", "numpy", "ruff>=0.15.12", "scipy", "ty>=0.0.32"]
 cholmod = ["scikit-sparse"]
 cuda = [
   "jax[cuda13]>=0.7",
-  "nvidia-cudss-cu13",
+  "nvidia-cudss-cu13>=0.7,<0.8",
   "cupy-cuda13x",
   "nvmath-python[cu13]",
 ]
@@ -27,7 +27,7 @@ requires = [
   "scikit-build-core>=0.10",
   "nanobind>=2.0",
   "jax>=0.7",
-  "nvidia-cudss-cu13; platform_system == 'Linux'",
+  "nvidia-cudss-cu13>=0.7,<0.8; platform_system == 'Linux'",
   "nvidia-cuda-runtime; platform_system == 'Linux'",
 ]
 build-backend = "scikit_build_core.build"
